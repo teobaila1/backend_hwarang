@@ -22,7 +22,10 @@ from backend.competitions.stergere_concurs import stergere_concurs_bp
 from backend.passwords.resetare_parola import resetare_bp
 from backend.users.parinti import parinti_bp
 from backend.users.elevi import elevi_bp
+import os
 
+SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
 app = Flask(__name__)
 CORS(app)
 
