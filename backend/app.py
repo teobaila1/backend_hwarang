@@ -27,7 +27,11 @@ import os
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
 app = Flask(__name__)
-CORS(app)
+# ✅ Setezi CORS pentru local și Netlify
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://localhost:5173",
+    "https://acshwarangacademysibiu.netlify.app"
+]}})
 
 app.register_blueprint(inscriere_bp)
 app.register_blueprint(autentificare_bp)
