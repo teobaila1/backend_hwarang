@@ -13,8 +13,8 @@ from ..config import get_conn, DB_PATH
 # ---------------- SMTP ----------------
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")  # ex: contul_tău@gmail.com
-SMTP_PASS = os.getenv("SMTP_PASS")  # App Password (Gmail, cu 2FA)
+SMTP_USER = os.getenv("SMTP_USER", "baila.teodor@gmail.com")  # ex: "contul_tau@gmail.com"
+SMTP_PASS = os.getenv("SMTP_PASS", "giqozfjtmxzscsri")  # ex: App Password (16 caractere)
 # -------------------------------------
 
 
