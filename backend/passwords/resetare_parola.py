@@ -13,12 +13,12 @@ resetare_bp = Blueprint("resetare", __name__)
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-env!")   # pune în ENV în producție
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://acshwarangacademysibiu.netlify.app")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")  # ex: contul_tău@gmail.com
-SMTP_PASS = os.getenv("SMTP_PASS")  # App Password (Gmail, cu 2FA)
+SMTP_USER = os.getenv("SMTP_USER", "baila.teodor@gmail.com")  # ex: "contul_tau@gmail.com"
+SMTP_PASS = os.getenv("SMTP_PASS", "giqozfjtmxzscsri")  # ex: App Password (16 caractere)
 
 # --- helpers ---
 

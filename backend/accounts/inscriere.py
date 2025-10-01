@@ -10,8 +10,8 @@ inscriere_bp = Blueprint("inscriere", __name__)
 # ---- Config SMTP din variabile de mediu (nu hardcoda parole!) ----
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")  # ex: contul_tău@gmail.com
-SMTP_PASS = os.getenv("SMTP_PASS")  # App Password (16 caractere la Gmail)
+SMTP_USER = os.getenv("SMTP_USER", "baila.teodor@gmail.com")  # ex: "contul_tau@gmail.com"
+SMTP_PASS = os.getenv("SMTP_PASS", "giqozfjtmxzscsri")  # ex: App Password (16 caractere)
 
 def _trimite_email(to_addr: str, subject: str, body: str):
     if not (SMTP_USER and SMTP_PASS):
