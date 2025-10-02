@@ -1,7 +1,7 @@
 import json
 import os
 import ssl
-from socket import socket
+import socket
 
 from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
