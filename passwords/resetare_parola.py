@@ -1,8 +1,13 @@
+import json
 import os
+import ssl
+import socket
+
 from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from email.mime.text import MIMEText
 import smtplib
+from email.mime.text import MIMEText
+from urllib import request as urlrequest
 
 from ..config import get_conn, DB_PATH
 from .security import hash_password  # wrapper peste werkzeug.security.generate_password_hash
@@ -22,22 +27,71 @@ SMTP_PASS = os.getenv("SMTP_PASS", "giqozfjtmxzscsri")  # ex: App Password (16 c
 
 # --- helpers ---
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")  # <- pune cheia aici în Render
+FROM_EMAIL     = os.getenv("FROM_EMAIL", os.getenv("SMTP_USER", ""))  # adresa expeditorului
+
 def _send_reset_email(to_addr: str, reset_link: str):
-    """Trimite e-mailul de resetare. Nu aruncă erori către client."""
-    if not (SMTP_USER and SMTP_PASS):
-        print("[WARN] Lipsesc SMTP_USER/SMTP_PASS; sar peste trimiterea emailului.")
-        return
+    """
+    Încercăm în ordinea: Resend API (HTTP) -> SMTP SSL(465) -> log în consolă.
+    NU aruncă excepții mai departe (nu vrem 500 la client dacă eșuează mailul).
+    """
+    subject = "Resetare parolă - ACS Hwarang"
+    body_text = f"Apasă aici pentru a-ți reseta parola:\n\n{reset_link}"
+    body_html = f"""
+        <p>Apasă aici pentru a-ți reseta parola:</p>
+        <p><a href="{reset_link}" target="_blank" rel="noreferrer">{reset_link}</a></p>
+    """
 
-    body = f"Apasă aici pentru a-ți reseta parola:\n\n{reset_link}"
-    msg = MIMEText(body, _charset="utf-8")
-    msg["Subject"] = "Resetare parolă - ACS Hwarang"
-    msg["From"] = SMTP_USER
-    msg["To"] = to_addr
+    # --- 1) Resend API (preferat pe PaaS) ---
+    if RESEND_API_KEY:
+        try:
+            payload = json.dumps({
+                "from": FROM_EMAIL or "no-reply@acshwarang.onresend.com",
+                "to": [to_addr],
+                "subject": subject,
+                "html": body_html
+            }).encode("utf-8")
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-        server.send_message(msg)
+            req = urlrequest.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urlrequest.urlopen(req, timeout=10) as resp:
+                # 2xx = ok
+                print("[MAIL] Resend OK:", resp.status)
+                return
+        except Exception as e:
+            print("[WARN] Resend a eșuat, încerc SMTP:", e)
+
+    # --- 2) SMTP SSL (465) ca fallback ---
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SSL direct
+    SMTP_USER = os.getenv("SMTP_USER")
+    SMTP_PASS = os.getenv("SMTP_PASS")
+
+    if SMTP_USER and SMTP_PASS:
+        try:
+            msg = MIMEText(body_html, "html", _charset="utf-8")
+            msg["Subject"] = subject
+            msg["From"] = FROM_EMAIL or SMTP_USER
+            msg["To"] = to_addr
+
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=10) as server:
+                server.login(SMTP_USER, SMTP_PASS)
+                server.sendmail(msg["From"], [to_addr], msg.as_string())
+                print("[MAIL] SMTP SSL OK")
+                return
+        except (socket.timeout, smtplib.SMTPException, OSError) as e:
+            print("[WARN] SMTP a eșuat:", e)
+
+    # --- 3) Fallback: doar logăm linkul (utile pentru test) ---
+    print(f"[MAIL-FAKE] către {to_addr}: {reset_link}")
 
 # --- endpoints ---
 
