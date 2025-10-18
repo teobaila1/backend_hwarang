@@ -18,7 +18,7 @@ resetare_bp = Blueprint("resetare", __name__)
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-env!")   # pune în ENV în producție
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://acshwarangacademysibiu.netlify.app")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://hwarangsibiu.netlify.app")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
