@@ -30,7 +30,7 @@ app = Flask(__name__)
 # ✅ Setezi CORS pentru local și Netlify
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:5173",
-    "https://acshwarangacademysibiu.netlify.app"
+    "https://hwarangsibiu.netlify.app"
 ]}})
 
 app.register_blueprint(inscriere_bp)

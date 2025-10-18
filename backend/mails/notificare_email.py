@@ -134,7 +134,7 @@ serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
-    "https://acshwarangacademysibiu.netlify.app"
+    "https://hwarangsibiu.netlify.app"
 ).rstrip("/")
 
 
