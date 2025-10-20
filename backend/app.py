@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from flask import Flask, session, jsonify
 from flask_cors import CORS
 from backend.accounts.autentificare import autentificare_bp
@@ -30,11 +32,13 @@ app = Flask(__name__)
 
 app.config["SECRET_KEY"] = SECRET_KEY                    # ✅ ACTIVARE sesiune (obligatoriu)
 # (opțional, dar util)
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"            # "Strict" dacă vrei mai restrictiv
-app.config["SESSION_COOKIE_SECURE"] = False              # True în producție (HTTPS)
+app.config["SESSION_COOKIE_SAMESITE"] = "None"            # "Strict" dacă vrei mai restrictiv
+app.config["SESSION_COOKIE_SECURE"] = True              # True în producție (HTTPS)
+
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
 
 # ✅ Setezi CORS pentru local și Netlify
-CORS(app, resources={r"/api/*": {"origins": [
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": [
     "http://localhost:5173",
     "https://hwarangsibiu.netlify.app"
 ]}})
