@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from flask import Flask, session, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from backend.accounts.autentificare import autentificare_bp
 from backend.users.antrenori_externi import antrenori_externi_bp
 from backend.users.antrenor_dashboard_copii_parinti import antrenor_dashboard_copii_parinti_bp
@@ -79,17 +79,18 @@ app.register_blueprint(elevi_bp)
 
 
 @app.get("/api/me")
+@cross_origin(
+    supports_credentials=True,
+    origins=["https://hwarangsibiu.netlify.app", "https://acshwarangacademysibiu.netlify.app"]
+)
 def api_me():
-    """
-    Întoarce utilizatorul din sesiune (dacă există).
-    Frontend-ul (Axios) trebuie să trimită withCredentials: true.
-    """
-    user = session.get("user")
-    if not user:
-        return jsonify({"user": None}), 200
-    return jsonify({"user": user}), 200
+    return jsonify({"user": session.get("user")}), 200
 
 @app.post("/api/logout")
+@cross_origin(
+    supports_credentials=True,
+    origins=["https://hwarangsibiu.netlify.app", "https://acshwarangacademysibiu.netlify.app"]
+)
 def api_logout():
     session.pop("user", None)
     return jsonify({"ok": True}), 200
