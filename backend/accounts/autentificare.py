@@ -1,6 +1,7 @@
-from flask import Blueprint, request, jsonify
+# backend/accounts/autentificare.py
+from flask import Blueprint, request, jsonify, session   # ✅ adaugă session
 from ..config import get_conn, DB_PATH
-from ..passwords.security import hash_password, check_password  # werkzeug wrappers
+from ..passwords.security import hash_password, check_password
 
 autentificare_bp = Blueprint("autentificare", __name__)
 
@@ -14,10 +15,6 @@ def login():
         return jsonify({"status": "error", "message": "Date incomplete"}), 400
 
     con = get_conn()
-    # debug util: vezi exact DB-ul și tabelele (poți comenta după ce e ok)
-    # print("DB:", DB_PATH)
-    # print("Tabele:", [r["name"] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")])
-
     user = con.execute("""
         SELECT id, username, email, parola, rol, grupe, copii
         FROM utilizatori
@@ -34,17 +31,13 @@ def login():
     if not isinstance(stored, str):
         stored = str(stored)
 
-    # 1) verificare normală (hash pbkdf2)
     ok = False
     try:
-        ok = check_password(stored, password)   # True dacă e hash werkzeug valid
+        ok = check_password(stored, password)
     except Exception:
         ok = False
-
-    # 2) fallback: dacă era „plain” în DB (moștenit vechi)
     if not ok and stored and not stored.startswith("pbkdf2:"):
         ok = (stored == password)
-
     if not ok:
         return jsonify({"status": "error", "message": "Utilizator sau parolă incorecte"}), 401
 
@@ -54,6 +47,16 @@ def login():
         con.execute("UPDATE utilizatori SET parola = ? WHERE id = ?", (new_hash, user["id"]))
         con.commit()
 
+    # ✅ Salvează identitatea minimă în sesiune
+    session["user"] = {
+        "id": user["id"],
+        "username": user["username"],
+        "email": user["email"],
+        # dacă ai 1 rol string, îl transformăm într-o listă:
+        "roles": [r.strip() for r in (user["rol"] or "").split(",") if r.strip()] or (
+            [user["rol"]] if user["rol"] else []),
+        "grupe": user["grupe"],
+    }
     return jsonify({
         "status": "success",
         "user": user["username"],

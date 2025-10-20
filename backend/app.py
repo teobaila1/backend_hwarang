@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, session, jsonify
 from flask_cors import CORS
 from backend.accounts.autentificare import autentificare_bp
 from backend.users.antrenori_externi import antrenori_externi_bp
@@ -27,6 +27,12 @@ import os
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
 app = Flask(__name__)
+
+app.config["SECRET_KEY"] = SECRET_KEY                    # ✅ ACTIVARE sesiune (obligatoriu)
+# (opțional, dar util)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"            # "Strict" dacă vrei mai restrictiv
+app.config["SESSION_COOKIE_SECURE"] = False              # True în producție (HTTPS)
+
 # ✅ Setezi CORS pentru local și Netlify
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:5173",
@@ -55,6 +61,26 @@ app.register_blueprint(stergere_concurs_bp)
 app.register_blueprint(resetare_bp)
 app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
+
+
+
+@app.get("/api/me")
+def api_me():
+    """
+    Întoarce utilizatorul din sesiune (dacă există).
+    Frontend-ul (Axios) trebuie să trimită withCredentials: true.
+    """
+    user = session.get("user")
+    if not user:
+        return jsonify({"user": None}), 200
+    return jsonify({"user": user}), 200
+
+@app.post("/api/logout")
+def api_logout():
+    session.pop("user", None)
+    return jsonify({"ok": True}), 200
+
+
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
