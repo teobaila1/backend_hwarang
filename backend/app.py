@@ -38,10 +38,20 @@ app.config["SESSION_COOKIE_SECURE"] = True              # True în producție (H
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
 
 # ✅ Setezi CORS pentru local și Netlify
-CORS(app, supports_credentials=True, resources={r"/api/.*": {"origins": [
-    "http://localhost:5173",
-    "https://hwarangsibiu.netlify.app"
-]}})
+CORS(
+    app,
+    supports_credentials=True,               # header Access-Control-Allow-Credentials: true
+    resources={
+        r"/api/.*": {                        # <— regex corect (nu r"/api/*")
+            "origins": [
+                "https://hwarangsibiu.netlify.app",
+                "https://acshwarangacademysibiu.netlify.app",
+                "http://localhost:5173",     # doar dacă vrei și dev aici
+                "http://127.0.0.1:5173",
+            ]
+        }
+    },
+)
 
 app.register_blueprint(inscriere_bp)
 app.register_blueprint(autentificare_bp)
