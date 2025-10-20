@@ -38,7 +38,7 @@ app.config["SESSION_COOKIE_SECURE"] = True              # True în producție (H
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
 
 # ✅ Setezi CORS pentru local și Netlify
-CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": [
+CORS(app, supports_credentials=True, resources={r"/api/.*": {"origins": [
     "http://localhost:5173",
     "https://hwarangsibiu.netlify.app"
 ]}})
