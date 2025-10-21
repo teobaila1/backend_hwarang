@@ -35,7 +35,6 @@ def toate_grupele_antrenori():
                grupe
         FROM utilizatori
         WHERE LOWER(rol) = 'antrenor'
-           OR LOWER(rol) = 'antrenorextern'
     """).fetchall()
 
     # 2) părinți (pentru copii)
