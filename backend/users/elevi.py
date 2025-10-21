@@ -236,66 +236,66 @@ def create_elev():
 
 
 
-@elevi_bp.patch("/api/elevi/<child_id>")
-def patch_elev(child_id):
-    data = request.get_json(silent=True) or {}
-
-    nume = (data.get("nume") or "").strip()
-    gen = (data.get("gen") or "").strip()
-    grupa = _normalize_grupa(data.get("grupa"))
-    varsta = data.get("varsta")
-    parent_name = (data.get("parent_name") or "").strip()
-
-    con = get_conn()
-    cur = con.cursor()
-
-    # găsește părintele care deține acest copil
-    rows = cur.execute("""
-        SELECT id, username, nume_complet, copii
-        FROM utilizatori
-        WHERE LOWER(rol)='parinte' AND copii IS NOT NULL AND copii <> ''
-    """).fetchall()
-
-    found = False
-    for r in rows:
-        try:
-            copii = json.loads(r["copii"] or "[]")
-        except Exception:
-            copii = []
-
-        changed = False
-        for c in copii:
-            if str(c.get("id")) == str(child_id):
-                if nume:   c["nume"]   = nume
-                if gen:    c["gen"]    = gen
-                if grupa:  c["grupa"]  = grupa
-                if varsta is not None:
-                    try: c["varsta"] = int(varsta)
-                    except Exception: pass
-                changed = True
-                found = True
-                break
-
-        if changed:
-            cur.execute(
-                "UPDATE utilizatori SET copii = ? WHERE id = ?",
-                (json.dumps(copii, ensure_ascii=False), r["id"])
-            )
-
-            # ✨ la nevoie, actualizăm și numele părintelui
-            if parent_name:
-                cur.execute(
-                    "UPDATE utilizatori SET nume_complet = ? WHERE id = ?",
-                    (parent_name, r["id"])
-                )
-
-            con.commit()
-            return jsonify({"status": "success"})
-
-    if not found:
-        return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
-
-
+# @elevi_bp.patch("/api/elevi/<child_id>")
+# def patch_elev(child_id):
+#     data = request.get_json(silent=True) or {}
+#
+#     nume = (data.get("nume") or "").strip()
+#     gen = (data.get("gen") or "").strip()
+#     grupa = _normalize_grupa(data.get("grupa"))
+#     varsta = data.get("varsta")
+#     parent_name = (data.get("parent_name") or "").strip()
+#
+#     con = get_conn()
+#     cur = con.cursor()
+#
+#     # găsește părintele care deține acest copil
+#     rows = cur.execute("""
+#         SELECT id, username, nume_complet, copii
+#         FROM utilizatori
+#         WHERE LOWER(rol)='parinte' AND copii IS NOT NULL AND copii <> ''
+#     """).fetchall()
+#
+#     found = False
+#     for r in rows:
+#         try:
+#             copii = json.loads(r["copii"] or "[]")
+#         except Exception:
+#             copii = []
+#
+#         changed = False
+#         for c in copii:
+#             if str(c.get("id")) == str(child_id):
+#                 if nume:   c["nume"]   = nume
+#                 if gen:    c["gen"]    = gen
+#                 if grupa:  c["grupa"]  = grupa
+#                 if varsta is not None:
+#                     try: c["varsta"] = int(varsta)
+#                     except Exception: pass
+#                 changed = True
+#                 found = True
+#                 break
+#
+#         if changed:
+#             cur.execute(
+#                 "UPDATE utilizatori SET copii = ? WHERE id = ?",
+#                 (json.dumps(copii, ensure_ascii=False), r["id"])
+#             )
+#
+#             # ✨ la nevoie, actualizăm și numele părintelui
+#             if parent_name:
+#                 cur.execute(
+#                     "UPDATE utilizatori SET nume_complet = ? WHERE id = ?",
+#                     (parent_name, r["id"])
+#                 )
+#
+#             con.commit()
+#             return jsonify({"status": "success"})
+#
+#     if not found:
+#         return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+#
+#
 
 @elevi_bp.patch("/api/elevi/<child_id>")
 def update_elev(child_id):
@@ -336,6 +336,7 @@ def update_elev(child_id):
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 @elevi_bp.delete("/api/elevi/<child_id>")
