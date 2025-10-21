@@ -1,7 +1,5 @@
-from datetime import timedelta
-
-from flask import Flask, session, jsonify
-from flask_cors import CORS, cross_origin
+from flask import Flask
+from flask_cors import CORS
 from backend.accounts.autentificare import autentificare_bp
 from backend.users.antrenori_externi import antrenori_externi_bp
 from backend.users.antrenor_dashboard_copii_parinti import antrenor_dashboard_copii_parinti_bp
@@ -29,29 +27,11 @@ import os
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
 app = Flask(__name__)
-
-app.config["SECRET_KEY"] = SECRET_KEY                    # ✅ ACTIVARE sesiune (obligatoriu)
-# (opțional, dar util)
-app.config["SESSION_COOKIE_SAMESITE"] = "None"            # "Strict" dacă vrei mai restrictiv
-app.config["SESSION_COOKIE_SECURE"] = True              # True în producție (HTTPS)
-
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
-
 # ✅ Setezi CORS pentru local și Netlify
-CORS(
-    app,
-    supports_credentials=True,               # header Access-Control-Allow-Credentials: true
-    resources={
-        r"/api/.*": {                        # <— regex corect (nu r"/api/*")
-            "origins": [
-                "https://hwarangsibiu.netlify.app",
-                "https://acshwarangacademysibiu.netlify.app",
-                "http://localhost:5173",     # doar dacă vrei și dev aici
-                "http://127.0.0.1:5173",
-            ]
-        }
-    },
-)
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://localhost:5173",
+    "https://hwarangsibiu.netlify.app"
+]}})
 
 app.register_blueprint(inscriere_bp)
 app.register_blueprint(autentificare_bp)
@@ -75,27 +55,6 @@ app.register_blueprint(stergere_concurs_bp)
 app.register_blueprint(resetare_bp)
 app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
-
-
-
-@app.get("/api/me")
-@cross_origin(
-    supports_credentials=True,
-    origins=["https://hwarangsibiu.netlify.app", "https://acshwarangacademysibiu.netlify.app"]
-)
-def api_me():
-    return jsonify({"user": session.get("user")}), 200
-
-@app.post("/api/logout")
-@cross_origin(
-    supports_credentials=True,
-    origins=["https://hwarangsibiu.netlify.app", "https://acshwarangacademysibiu.netlify.app"]
-)
-def api_logout():
-    session.pop("user", None)
-    return jsonify({"ok": True}), 200
-
-
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
