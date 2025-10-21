@@ -13,111 +13,95 @@ def normalize_grupa(value):
     m = re.match(r'^\s*(?:grupa\s*)?(\d+)\s*$', s, re.IGNORECASE)
     return f"Grupa {m.group(1)}" if m else s
 
-def _ensure_child_ids_and_normalize(children):
-    """Adaugă id dacă lipsește și normalizează grupa; întoarce (changed, children)."""
-    import uuid
-    changed = False
-    for c in children or []:
-        if not c.get("id"):
-            c["id"] = uuid.uuid4().hex
-            changed = True
-        if "grupa" in c:
-            ng = normalize_grupa(c["grupa"])
-            if ng != c["grupa"]:
-                c["grupa"] = ng
-                changed = True
-        # varsta întotdeauna int dacă e posibil (fără să stricăm dacă nu e numeric)
-        if "varsta" in c and isinstance(c["varsta"], str) and c["varsta"].isdigit():
-            c["varsta"] = int(c["varsta"])
-            changed = True
-    return changed, children
+def _safe_load_children(raw):
+    try:
+        v = json.loads(raw or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+def _group_sort_key(name: str):
+    m = re.search(r"(\d+)", name or "")
+    return int(m.group(1)) if m else 9999
 
 @toate_grupele_antrenori_bp.get("/api/toate_grupele_antrenori")
 def toate_grupele_antrenori():
-    try:
-        con = get_conn()
+    con = get_conn()
 
-        # 1) Toți antrenorii cu grupele lor
-        antrenori_rows = con.execute(
-            """
-            SELECT
-              username,
-              COALESCE(nume_complet, username) AS display_name,
-              grupe
-            FROM utilizatori
-            WHERE LOWER(rol) = 'antrenor'
-              AND grupe IS NOT NULL
-            """
-        ).fetchall()
+    # 1) toți antrenorii (include și AntrenorExtern dacă vrei)
+    trainers = con.execute("""
+        SELECT id, username,
+               COALESCE(nume_complet, username) AS display_name,
+               grupe
+        FROM utilizatori
+        WHERE LOWER(rol) = 'antrenor'
+           OR LOWER(rol) = 'antrenorextern'
+    """).fetchall()
 
-        # 2) Toți părinții + copii (cu id-uri asigurate)
-        parinti_rows = con.execute(
-            "SELECT id, username, email, copii FROM utilizatori WHERE LOWER(rol) = 'parinte'"
-        ).fetchall()
+    # 2) părinți (pentru copii)
+    parents = con.execute("""
+        SELECT username, email,
+               COALESCE(nume_complet, username) AS display_name,
+               copii
+        FROM utilizatori
+        WHERE LOWER(rol) = 'parinte'
+    """).fetchall()
 
-        parinti_parsati = []
-        for r in parinti_rows:
-            copii_list = []
-            if r["copii"]:
-                try:
-                    copii_list = json.loads(r["copii"])
-                except Exception:
-                    copii_list = []
-            changed, copii_list = _ensure_child_ids_and_normalize(copii_list)
-            if changed:
-                con.execute(
-                    "UPDATE utilizatori SET copii = ? WHERE id = ?",
-                    (json.dumps(copii_list, ensure_ascii=False), r["id"])
-                )
-                con.commit()
-
-            parinti_parsati.append({
-                "id": r["id"],
-                "username": r["username"],
-                "email": r["email"],
-                "copii": copii_list
-            })
-
-        rezultat_final = []
-
-        for a in antrenori_rows:
-            antrenor = a["username"]
-            antrenor_display = a["display_name"]
-            grupe_raw = (a["grupe"] or "")
-            grupe_norm = [normalize_grupa(g) for g in grupe_raw.split(",") if g.strip()]
-
-            grupe_result = []
-            for grupa in grupe_norm:
-                for par in parinti_parsati:
-                    # copii părinte în grupa curentă
-                    copii_din_grupa = []
-                    for c in par["copii"]:
-                        if normalize_grupa(c.get("grupa")) == grupa:
-                            copii_din_grupa.append({
-                                "id": c.get("id"),                # <<— NECESAR pt edit/delete
-                                "nume": c.get("nume"),
-                                "varsta": c.get("varsta"),
-                                "gen": c.get("gen"),
-                                "grupa": grupa
-                            })
-
-                    if copii_din_grupa:
-                        grupe_result.append({
-                            "grupa": grupa,
-                            "copii": copii_din_grupa,
-                            "parinte": {
-                                "id": par["id"],
-                                "username": par["username"],
-                                "email": par["email"]
-                            }
-                        })
-
-        rezultat_final.append({
-            "antrenor": antrenor,
-            "antrenor_display": antrenor_display,  # 👈 adăugat
-            "grupe": grupe_result
+    # pre-parsăm copiii pentru toți părinții
+    parsed_parents = []
+    for p in parents:
+        kids = _safe_load_children(p["copii"])
+        if not kids:
+            continue
+        parsed_parents.append({
+            "username": p["username"],
+            "email": p["email"],
+            "display": p["display_name"],
+            "copii": kids
         })
 
-        return jsonify({"status": "success", "data": rezultat_final})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    out = []  # <<< IMPORTANT: colectăm toți antrenorii aici (append), nu suprascriem
+
+    for tr in trainers:
+        # liste grupe ale antrenorului
+        groups_raw = [g.strip() for g in (tr["grupe"] or "").split(",") if g.strip()]
+        groups = [normalize_grupa(g) for g in groups_raw]
+        groups = [g for g in groups if g]  # fără None/empty
+
+        # map grupa -> listă copii
+        groups_map = {g: [] for g in groups}
+
+        # atașăm copiii părinților dacă grupa lor e în groups_map
+        for p in parsed_parents:
+            for c in p["copii"]:
+                g = normalize_grupa(c.get("grupa"))
+                if g in groups_map:
+                    groups_map[g].append({
+                        "id": c.get("id"),
+                        "nume": c.get("nume"),
+                        "varsta": c.get("varsta"),
+                        "gen": c.get("gen"),
+                        "grupa": g,
+                        "_parent": {
+                            "username": p["username"],
+                            "email": p["email"],
+                            "display": p["display"]
+                        }
+                    })
+
+        # construim structura finală pentru antrenorul curent
+        grupe_list = [
+            {"grupa": g, "copii": sorted(groups_map[g], key=lambda k: (str(k.get("nume") or "").lower()))}
+            for g in sorted(groups_map.keys(), key=_group_sort_key)
+        ]
+
+        out.append({
+            "antrenor": tr["username"],
+            "antrenor_display": tr["display_name"],
+            "grupe": grupe_list
+        })
+
+    # sortăm antrenorii alfabetic după display
+    out.sort(key=lambda r: (r.get("antrenor_display") or r.get("antrenor") or "").lower())
+
+    return jsonify({"status": "success", "data": out}), 200
