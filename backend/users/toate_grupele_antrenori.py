@@ -34,7 +34,7 @@ def toate_grupele_antrenori():
                COALESCE(nume_complet, username) AS display_name,
                grupe
         FROM utilizatori
-        WHERE LOWER(rol) = 'antrenor'
+        WHERE LOWER(rol) = 'Antrenor'
     """).fetchall()
 
     # 2) părinți (pentru copii)
