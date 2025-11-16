@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
-    <data-source source="LOCAL" name="users" uuid="c8c97c63-fca8-4d53-8d3c-182d19635746">
+    <data-source source="LOCAL" name="users" uuid="5acce66d-64f5-4948-8ec0-15aacd5ef5ef">
       <driver-ref>sqlite.xerial</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
-      <jdbc-url>jdbc:sqlite:C:\Users\Teo\Desktop\backend_hwarang-main\backend\users.db</jdbc-url>
+      <jdbc-url>jdbc:sqlite:C:\Users\Teo\PycharmProjects\backend_hwarang\backend\users.db</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
       <libraries>
         <library>
