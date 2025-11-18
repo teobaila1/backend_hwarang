@@ -123,8 +123,8 @@ from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from ..config import get_conn, DB_PATH
-from .security import hash_password
 from ..mails.emailer import send_email_http
+from ..passwords.security import hash_password
 
 resetare_bp = Blueprint("resetare", __name__)
 
