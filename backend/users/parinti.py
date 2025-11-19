@@ -5,15 +5,48 @@ from backend.config import get_conn
 
 parinti_bp = Blueprint("parinti", __name__)
 
+
 def _normalize_name(s):
     s = (s or "").strip()
     # spații multiple -> spațiu simplu; primele litere mari
     s = re.sub(r"\s+", " ", s)
     return s
 
+
 def _new_claim_code():
     # cod scurt, lizibil (8 chars)
     return uuid.uuid4().hex[:8].upper()
+
+
+def _get_columns(con, table_name: str):
+    """
+    Returnează setul de coloane pentru un tabel, funcționând atât pe PostgreSQL,
+    cât și pe SQLite.
+    """
+    cols = set()
+
+    # Încercăm întâi varianta PostgreSQL (information_schema)
+    try:
+        rows = con.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = %s
+        """, (table_name,)).fetchall()
+        if rows:
+            return {r[0] for r in rows}
+    except Exception:
+        pass
+
+    # Fallback: SQLite PRAGMA, dacă suntem pe SQLite
+    try:
+        info = con.execute(f"PRAGMA table_info({table_name})").fetchall()
+        # format: (cid, name, type, notnull, dflt_value, pk)
+        cols = {r[1] for r in info}
+    except Exception:
+        cols = set()
+
+    return cols
+
 
 @parinti_bp.post("/api/parinti/placeholder")
 def create_parent_placeholder():
@@ -31,11 +64,12 @@ def create_parent_placeholder():
         vals = ["parinte", nume, None, 1, claim_code, 1, "[]", ""]
 
         # dacă ai coloana nume_complet, o setăm
-        cur_cols = {r[1] for r in con.execute("PRAGMA table_info(utilizatori)").fetchall()}
+        cur_cols = _get_columns(con, "utilizatori")
         if "nume_complet" in cur_cols:
-            cols.append("nume_complet"); vals.append(nume)
+            cols.append("nume_complet")
+            vals.append(nume)
 
-        placeholders = ", ".join(["?"] * len(cols))
+        placeholders = ", ".join(["?"] * len(cols))  # `?` va fi convertit în `%s` de wrapper-ul din config.py
         sql = f"INSERT INTO utilizatori ({', '.join(cols)}) VALUES ({placeholders})"
         cur = con.execute(sql, tuple(vals))
 
@@ -51,10 +85,10 @@ def create_parent_placeholder():
 @parinti_bp.patch("/api/parinti/claim")
 def claim_parent_account():
     data = request.get_json(silent=True) or {}
-    nume  = _normalize_name(data.get("nume"))
+    nume = _normalize_name(data.get("nume"))
     email = (data.get("email") or "").strip() or None
     parola_hash = data.get("parola_hash")
-    claim_code  = (data.get("claim_code") or "").strip().upper() or None
+    claim_code = (data.get("claim_code") or "").strip().upper() or None
 
     if not nume:
         return jsonify({"status": "error", "message": "Numele este obligatoriu."}), 400
@@ -85,9 +119,11 @@ def claim_parent_account():
 
         fields, values = [], []
         if email is not None:
-            fields.append("email = %s");  values.append(email)
+            fields.append("email = %s")
+            values.append(email)
         if parola_hash:
-            fields.append("parola = %s"); values.append(parola_hash)
+            fields.append("parola = %s")
+            values.append(parola_hash)
         # alte câmpuri opționale
         for k in ("telefon", "adresa"):
             if k in data:
