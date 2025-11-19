@@ -149,7 +149,7 @@ def cerere_resetare():
 
     con = get_conn()
     user = con.execute(
-        "SELECT id, email FROM utilizatori WHERE LOWER(email) = ?",
+        "SELECT id, email FROM utilizatori WHERE LOWER(email) = %s",
         (email,)
     ).fetchone()
 
@@ -193,7 +193,7 @@ def reseteaza_parola(token):
     con = get_conn()
     cur = con.cursor()
     row = cur.execute(
-        "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(?)",
+        "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(%s)",
         (email,)
     ).fetchone()
     if not row:
@@ -201,7 +201,7 @@ def reseteaza_parola(token):
 
     hashed = hash_password(parola_noua)
     cur.execute(
-        "UPDATE utilizatori SET parola = ? WHERE LOWER(email) = LOWER(?)",
+        "UPDATE utilizatori SET parola = %s WHERE LOWER(email) = LOWER(%s)",
         (hashed, email)
     )
     con.commit()

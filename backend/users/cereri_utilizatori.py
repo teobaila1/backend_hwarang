@@ -29,7 +29,7 @@ def get_cereri():
 
         # verifică rolul de admin
         row = con.execute(
-            "SELECT rol FROM utilizatori WHERE username = ? LIMIT 1",
+            "SELECT rol FROM utilizatori WHERE username = %s LIMIT 1",
             (username,)
         ).fetchone()
         if not row:
@@ -79,7 +79,7 @@ def accepta_cerere(cerere_id: int):
         row = cur.execute("""
             SELECT id, username, email, parola, tip, copii, grupe, nume_complet
             FROM cereri_utilizatori
-            WHERE id = ?
+            WHERE id = %s
         """, (cerere_id,)).fetchone()
 
         if not row:
@@ -92,7 +92,7 @@ def accepta_cerere(cerere_id: int):
 
         # verifică duplicate în utilizatori
         exists = cur.execute(
-            "SELECT 1 FROM utilizatori WHERE username = ? OR email = ? LIMIT 1",
+            "SELECT 1 FROM utilizatori WHERE username = %s OR email = %s LIMIT 1",
             (username, email)
         ).fetchone()
         if exists:
@@ -101,11 +101,11 @@ def accepta_cerere(cerere_id: int):
         # inserăm în utilizatori și numele complet (fallback pe username)
         cur.execute("""
             INSERT INTO utilizatori (username, parola, rol, email, grupe, copii, nume_complet)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (username, parola, tip, email, grupe, copii, (nume_complet or username)))
 
         # ștergem cererea
-        cur.execute("DELETE FROM cereri_utilizatori WHERE id = ?", (cerere_id,))
+        cur.execute("DELETE FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         con.commit()
 
         # e-mail după commit (non-blocking)
@@ -127,7 +127,7 @@ def respinge_cerere(cerere_id: int):
         cur = con.cursor()
 
         row = cur.execute(
-            "SELECT username, email FROM cereri_utilizatori WHERE id = ?",
+            "SELECT username, email FROM cereri_utilizatori WHERE id = %s",
             (cerere_id,)
         ).fetchone()
 
@@ -136,7 +136,7 @@ def respinge_cerere(cerere_id: int):
 
         username, email = row["username"], row["email"]
 
-        cur.execute("DELETE FROM cereri_utilizatori WHERE id = ?", (cerere_id,))
+        cur.execute("DELETE FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         con.commit()
 
         try:

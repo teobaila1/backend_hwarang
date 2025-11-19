@@ -64,7 +64,7 @@ def claim_parent_account():
         row = None
         if claim_code:
             row = con.execute(
-                "SELECT * FROM utilizatori WHERE claim_code = ? AND is_placeholder = 1",
+                "SELECT * FROM utilizatori WHERE claim_code = %s AND is_placeholder = 1",
                 (claim_code,)
             ).fetchone()
             if not row:
@@ -72,7 +72,7 @@ def claim_parent_account():
         else:
             # match pe username (nu pe o coloană 'nume' inexistentă)
             rows = con.execute(
-                "SELECT * FROM utilizatori WHERE is_placeholder = 1 AND LOWER(username) = LOWER(?)",
+                "SELECT * FROM utilizatori WHERE is_placeholder = 1 AND LOWER(username) = LOWER(%s)",
                 (nume,)
             ).fetchall()
             if not rows:
@@ -85,13 +85,13 @@ def claim_parent_account():
 
         fields, values = [], []
         if email is not None:
-            fields.append("email = ?");  values.append(email)
+            fields.append("email = %s");  values.append(email)
         if parola_hash:
-            fields.append("parola = ?"); values.append(parola_hash)
+            fields.append("parola = %s"); values.append(parola_hash)
         # alte câmpuri opționale
         for k in ("telefon", "adresa"):
             if k in data:
-                fields.append(f"{k} = ?")
+                fields.append(f"{k} = %s")
                 values.append((data.get(k) or "").strip() or None)
 
         fields.append("is_placeholder = 0")
@@ -101,7 +101,7 @@ def claim_parent_account():
             return jsonify({"status": "error", "message": "Nu ai trimis date noi de completat."}), 400
 
         values.append(parent_id)
-        con.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = ?", values)
+        con.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s", values)
         con.commit()
         return jsonify({"status": "success", "id": parent_id}), 200
 

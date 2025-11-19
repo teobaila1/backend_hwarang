@@ -109,7 +109,7 @@
 #         return jsonify({"status": "error", "message": "Email lipsă"}), 400
 #
 #     con = get_conn()
-#     user = con.execute("SELECT id, email FROM utilizatori WHERE LOWER(email) = ?", (email,)).fetchone()
+#     user = con.execute("SELECT id, email FROM utilizatori WHERE LOWER(email) = %s", (email,)).fetchone()
 #     if not user:
 #         # Nu dezvăluim existența contului → răspuns „success” oricum
 #         return jsonify({"status": "success", "message": "Dacă emailul există, vei primi un link de resetare."}), 200
@@ -146,12 +146,12 @@
 #     cur = con.cursor()
 #
 #     # Verifică existența utilizatorului
-#     row = cur.execute("SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(?)", (email,)).fetchone()
+#     row = cur.execute("SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(%s)", (email,)).fetchone()
 #     if not row:
 #         return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
 #
 #     hashed = hash_password(parola_noua)
-#     cur.execute("UPDATE utilizatori SET parola = ? WHERE LOWER(email) = LOWER(?)", (hashed, email))
+#     cur.execute("UPDATE utilizatori SET parola = %s WHERE LOWER(email) = LOWER(%s)", (hashed, email))
 #     con.commit()
 #
 #     return jsonify({"status": "success", "message": "Parolă schimbată"}), 200
@@ -189,7 +189,7 @@ def cerere_resetare():
 
     con = get_conn()
     user = con.execute(
-        "SELECT id, email FROM utilizatori WHERE LOWER(email) = ?",
+        "SELECT id, email FROM utilizatori WHERE LOWER(email) = %s",
         (email,)
     ).fetchone()
 
@@ -233,7 +233,7 @@ def reseteaza_parola(token):
     con = get_conn()
     cur = con.cursor()
     row = cur.execute(
-        "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(?)",
+        "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(%s)",
         (email,)
     ).fetchone()
     if not row:
@@ -241,7 +241,7 @@ def reseteaza_parola(token):
 
     hashed = hash_password(parola_noua)
     cur.execute(
-        "UPDATE utilizatori SET parola = ? WHERE LOWER(email) = LOWER(?)",
+        "UPDATE utilizatori SET parola = %s WHERE LOWER(email) = LOWER(%s)",
         (hashed, email)
     )
     con.commit()

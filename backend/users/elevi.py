@@ -33,9 +33,9 @@ def _table_has_column(con, table, column):
 def _update_field_by_id_or_username(con, parent_id, parent_username, field, value):
     """Face UPDATE fie după id, fie (fallback) după username (case-insensitive)."""
     if parent_id is not None:
-        con.execute(f"UPDATE utilizatori SET {field} = ? WHERE id = ?", (value, parent_id))
+        con.execute(f"UPDATE utilizatori SET {field} = %s WHERE id = %s", (value, parent_id))
     else:
-        con.execute(f"UPDATE utilizatori SET {field} = ? WHERE LOWER(username) = LOWER(?)",
+        con.execute(f"UPDATE utilizatori SET {field} = %s WHERE LOWER(username) = LOWER(%s)",
                     (value, parent_username))
 
 def _save_parent_children(con, parent_id, parent_username, children):
@@ -91,7 +91,7 @@ def _create_placeholder_parent_by_name(con, parent_name):
     # Refolosește placeholder existent (exact același username)
     row = con.execute(
         "SELECT id, username FROM utilizatori "
-        "WHERE LOWER(rol)='parinte' AND is_placeholder=1 AND LOWER(username)=LOWER(?)",
+        "WHERE LOWER(rol)='parinte' AND is_placeholder=1 AND LOWER(username)=LOWER(%s)",
         (uname,)
     ).fetchone()
     if row:
@@ -101,7 +101,7 @@ def _create_placeholder_parent_by_name(con, parent_name):
     base = uname
     cand = base
     i = 1
-    while con.execute("SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(?)", (cand,)).fetchone():
+    while con.execute("SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(%s)", (cand,)).fetchone():
         i += 1
         cand = f"{base} ({i})"
 
@@ -118,7 +118,7 @@ def _create_placeholder_parent_by_name(con, parent_name):
     if _table_has_column(con, "utilizatori", "nume_complet"):
         cols.append("nume_complet"); vals.append(uname)  # sau cand
 
-    placeholders = ", ".join(["?"] * len(cols))
+    placeholders = ", ".join(["%s"] * len(cols))
     sql = f"INSERT INTO utilizatori ({', '.join(cols)}) VALUES ({placeholders})"
     cur = con.execute(sql, tuple(vals))
 
@@ -161,7 +161,7 @@ def create_elev():
 
         if parent_id:
             parent_row = con.execute(
-                "SELECT id, username, copii, grupe FROM utilizatori WHERE id = ?",
+                "SELECT id, username, copii, grupe FROM utilizatori WHERE id = %s",
                 (parent_id,)
             ).fetchone()
             if not parent_row:
@@ -173,7 +173,7 @@ def create_elev():
             # a) Refolosește placeholder existent
             parent_row = con.execute(
                 "SELECT id, username, copii, grupe FROM utilizatori "
-                "WHERE LOWER(rol)='parinte' AND is_placeholder=1 AND LOWER(username)=LOWER(?) "
+                "WHERE LOWER(rol)='parinte' AND is_placeholder=1 AND LOWER(username)=LOWER(%s) "
                 "ORDER BY rowid DESC LIMIT 1",
                 (parent_nume,)
             ).fetchone()
@@ -188,7 +188,7 @@ def create_elev():
                 # citește rândul proaspăt creat
                 parent_row = con.execute(
                     "SELECT id, username, copii, grupe FROM utilizatori "
-                    "WHERE LOWER(rol)='parinte' AND LOWER(username)=LOWER(?) "
+                    "WHERE LOWER(rol)='parinte' AND LOWER(username)=LOWER(%s) "
                     "ORDER BY rowid DESC LIMIT 1",
                     (uname_used,)
                 ).fetchone()
@@ -278,14 +278,14 @@ def create_elev():
 #
 #         if changed:
 #             cur.execute(
-#                 "UPDATE utilizatori SET copii = ? WHERE id = ?",
+#                 "UPDATE utilizatori SET copii = %s WHERE id = %s",
 #                 (json.dumps(copii, ensure_ascii=False), r["id"])
 #             )
 #
 #             # ✨ la nevoie, actualizăm și numele părintelui
 #             if parent_name:
 #                 cur.execute(
-#                     "UPDATE utilizatori SET nume_complet = ? WHERE id = ?",
+#                     "UPDATE utilizatori SET nume_complet = %s WHERE id = %s",
 #                     (parent_name, r["id"])
 #                 )
 #

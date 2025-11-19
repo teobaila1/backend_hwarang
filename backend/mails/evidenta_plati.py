@@ -151,20 +151,20 @@ def add_plata():
         # Dacă există deja o plată pentru același copil + lună -> UPDATE
         existing = con.execute("""
             SELECT id FROM plati
-            WHERE UPPER(copil_nume) = UPPER(?) AND LOWER(luna) = LOWER(?)
+            WHERE UPPER(copil_nume) = UPPER(%s) AND LOWER(luna) = LOWER(%s)
             LIMIT 1
         """, (copil_nume, luna)).fetchone()
 
         if existing:
             con.execute("""
                 UPDATE plati
-                   SET suma = ?, tip_plata = ?, status = ?, parinte_id = ?
-                 WHERE id = ?
+                   SET suma = %s, tip_plata = %s, status = %s, parinte_id = %s
+                 WHERE id = %s
             """, (suma, tip_plata, status, parinte_id, existing["id"]))
         else:
             con.execute("""
                 INSERT INTO plati (parinte_id, copil_nume, luna, suma, tip_plata, status)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (parinte_id, copil_nume, luna, suma, tip_plata, status))
 
         con.commit()
@@ -183,13 +183,13 @@ def update_plata(id):
         #ensure_tables()
         con = get_conn()
 
-        exista = con.execute("SELECT id FROM plati WHERE id = ?", (id,)).fetchone()
+        exista = con.execute("SELECT id FROM plati WHERE id = %s", (id,)).fetchone()
 
         if exista:
             con.execute("""
                 UPDATE plati
-                   SET copil_nume = ?, luna = ?, suma = ?, tip_plata = ?, status = ?
-                 WHERE id = ?
+                   SET copil_nume = %s, luna = %s, suma = %s, tip_plata = %s, status = %s
+                 WHERE id = %s
             """, (
                 data.get("copil_nume"),
                 data.get("luna"),
@@ -204,7 +204,7 @@ def update_plata(id):
                 return jsonify({"error": "Parinte necunoscut pentru copilul dat"}), 400
             con.execute("""
                 INSERT INTO plati (parinte_id, copil_nume, luna, suma, tip_plata, status)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 parinte_id,
                 data.get("copil_nume"),
@@ -226,7 +226,7 @@ def delete_plata(id):
     try:
        # ensure_tables()
         con = get_conn()
-        con.execute("DELETE FROM plati WHERE id = ?", (id,))
+        con.execute("DELETE FROM plati WHERE id = %s", (id,))
         con.commit()
         return jsonify({"message": "Plată ștearsă"}), 200
     except Exception as e:

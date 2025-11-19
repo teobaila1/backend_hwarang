@@ -19,7 +19,7 @@ def adauga_concurs():
         # (opțional) prevenim duplicatele pe (nume, perioada, locatie)
         dup = con.execute(
             """SELECT 1 FROM concursuri
-               WHERE LOWER(nume)=LOWER(?) AND perioada=? AND LOWER(locatie)=LOWER(?)
+               WHERE LOWER(nume)=LOWER(%s) AND perioada=%s AND LOWER(locatie)=LOWER(%s)
                LIMIT 1""",
             (nume, perioada, locatie)
         ).fetchone()
@@ -27,7 +27,7 @@ def adauga_concurs():
             return jsonify({"status": "error", "message": "Concurs deja existent"}), 409
 
         con.execute(
-            "INSERT INTO concursuri (nume, perioada, locatie) VALUES (?, ?, ?)",
+            "INSERT INTO concursuri (nume, perioada, locatie) VALUES (%s, %s, %s)",
             (nume, perioada, locatie)
         )
         con.commit()

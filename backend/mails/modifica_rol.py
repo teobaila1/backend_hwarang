@@ -18,7 +18,7 @@ def modifica_rol():
 
         # 1) verifică dacă cererea vine de la un admin
         admin = con.execute(
-            "SELECT rol FROM utilizatori WHERE username = ? LIMIT 1",
+            "SELECT rol FROM utilizatori WHERE username = %s LIMIT 1",
             (admin_username,)
         ).fetchone()
         if not admin or (admin["rol"] or "").lower() != "admin":
@@ -26,7 +26,7 @@ def modifica_rol():
 
         # 2) verifică dacă ținta există
         target = con.execute(
-            "SELECT id, rol FROM utilizatori WHERE username = ? LIMIT 1",
+            "SELECT id, rol FROM utilizatori WHERE username = %s LIMIT 1",
             (target_username,)
         ).fetchone()
         if not target:
@@ -37,7 +37,7 @@ def modifica_rol():
             return jsonify({"status": "success", "message": "Rolul este deja setat"}), 200
 
         con.execute(
-            "UPDATE utilizatori SET rol = ? WHERE id = ?",
+            "UPDATE utilizatori SET rol = %s WHERE id = %s",
             (rol_nou, target["id"])
         )
         con.commit()

@@ -37,7 +37,7 @@ def inscriere():
     try:
         con = get_conn()
         con.execute(
-            "INSERT INTO inscrieri (nume, prenume, email, telefon, mesaj) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO inscrieri (nume, prenume, email, telefon, mesaj) VALUES (%s, %s, %s, %s, %s)",
             (nume, prenume, email, telefon, mesaj)
         )
         con.commit()

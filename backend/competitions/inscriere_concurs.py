@@ -35,7 +35,7 @@ def inscriere_concurs():
         con = get_conn()
 
         # emailul se obține din tabela utilizatori
-        row = con.execute("SELECT email FROM utilizatori WHERE username = ?", (username,)).fetchone()
+        row = con.execute("SELECT email FROM utilizatori WHERE username = %s", (username,)).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
         email = row["email"]
@@ -62,7 +62,7 @@ def inscriere_concurs():
             INSERT INTO inscrieri_concursuri
                 (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen))
         con.commit()
 

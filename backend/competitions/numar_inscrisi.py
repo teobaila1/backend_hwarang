@@ -8,7 +8,7 @@ def numar_inscrisi(nume_concurs: str):
     try:
         con = get_conn()
         row = con.execute(
-            "SELECT COUNT(*) AS cnt FROM inscrieri_concursuri WHERE concurs = ?",
+            "SELECT COUNT(*) AS cnt FROM inscrieri_concursuri WHERE concurs = %s",
             (nume_concurs,)
         ).fetchone()
         return jsonify({"nr": (row["cnt"] if row else 0)})
@@ -24,7 +24,7 @@ def inscrisi_concurs(nume_concurs: str):
         rows = con.execute("""
             SELECT nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen
             FROM inscrieri_concursuri
-            WHERE concurs = ?
+            WHERE concurs = %s
             ORDER BY id DESC
         """, (nume_concurs,)).fetchall()
 

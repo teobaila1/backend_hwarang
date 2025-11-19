@@ -25,10 +25,9 @@ def _normalize_grupa(value: str):
     return f"Grupa {m.group(1)}" if m else s
 
 def _is_admin(con, username):
-    r = con.execute("SELECT rol FROM utilizatori WHERE username=?", (username,)).fetchone()
+    r = con.execute("SELECT rol FROM utilizatori WHERE username=%s", (username,)).fetchone()
     return bool(r and str(r["rol"]).lower() == "admin")
 
-# ---------------- GET toți copiii ----------------
 # ---------------- GET toți copiii ----------------
 @toti_copiii_parintilor_bp.get("/api/toti_copiii")
 def toti_copiii():
@@ -51,8 +50,8 @@ def toti_copiii():
                 "parinte": {
                     "username": r["username"],
                     "email": r["email"],
-                    "nume_complet": r["nume_complet"],     # 👈 îl trimitem separat
-                    "display": r["display_name"],           # nume de afișat
+                    "nume_complet": r["nume_complet"],
+                    "display": r["display_name"],
                 },
                 "copii": _safe_load_list(r["copii"])
             })
@@ -61,7 +60,7 @@ def toti_copiii():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ---------------- POST adaugă copil (util: alte pagini) ----------------
+# ---------------- POST adaugă copil ----------------
 @toti_copiii_parintilor_bp.post("/api/adauga_copil")
 def adauga_copil():
     data = request.get_json(silent=True) or {}
@@ -80,7 +79,7 @@ def adauga_copil():
     try:
         con = get_conn()
         row = con.execute(
-            "SELECT copii FROM utilizatori WHERE username = ? AND LOWER(rol) = 'parinte'",
+            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) = 'parinte'",
             (username,)
         ).fetchone()
         if not row:
@@ -97,7 +96,7 @@ def adauga_copil():
         lista.append(copil_nou)
 
         con.execute(
-            "UPDATE utilizatori SET copii = ? WHERE username = ?",
+            "UPDATE utilizatori SET copii = %s WHERE username = %s",
             (json.dumps(lista, ensure_ascii=False), username)
         )
         con.commit()
@@ -119,8 +118,10 @@ def admin_update_child(child_id):
     if "gen" in data:     fields["gen"]  = (data["gen"] or None)
     if "grupa" in data:   fields["grupa"] = _normalize_grupa(data["grupa"])
     if "varsta" in data:
-        try: fields["varsta"] = int(data["varsta"])
-        except: return jsonify({"status":"error","message":"Vârsta trebuie să fie număr."}), 400
+        try:
+            fields["varsta"] = int(data["varsta"])
+        except:
+            return jsonify({"status":"error","message":"Vârsta trebuie să fie număr."}), 400
 
     try:
         con = get_conn()
@@ -128,7 +129,7 @@ def admin_update_child(child_id):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=? AND LOWER(rol)='parinte'",
+            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
             (parent_username,)
         ).fetchone()
         if not r:
@@ -141,7 +142,7 @@ def admin_update_child(child_id):
 
         copii[idx].update(fields)
         con.execute(
-            "UPDATE utilizatori SET copii=? WHERE username=?",
+            "UPDATE utilizatori SET copii=%s WHERE username=%s",
             (json.dumps(copii, ensure_ascii=False), parent_username)
         )
         con.commit()
@@ -164,7 +165,7 @@ def admin_delete_child(child_id):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=? AND LOWER(rol)='parinte'",
+            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
             (parent_username,)
         ).fetchone()
         if not r:
@@ -176,7 +177,7 @@ def admin_delete_child(child_id):
             return jsonify({"status":"error","message":"Copil inexistent."}), 404
 
         con.execute(
-            "UPDATE utilizatori SET copii=? WHERE username=?",
+            "UPDATE utilizatori SET copii=%s WHERE username=%s",
             (json.dumps(new_list, ensure_ascii=False), parent_username)
         )
         con.commit()
@@ -186,9 +187,35 @@ def admin_delete_child(child_id):
 
 # ---------------- ADMIN: PATCH părinte (username/email) ----------------
 def _ensure_column(con, table, column, sql_type="TEXT"):
-    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in cols:
-        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+    """
+    Versiune compatibilă PostgreSQL + SQLite.
+
+    - Încearcă mai întâi information_schema (Postgres).
+    - Dacă pică, folosește PRAGMA table_info (SQLite).
+    """
+    exists = False
+
+    try:
+        # PostgreSQL (prin wrapper-ul tău cu get_conn)
+        row = con.execute("""
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = %s AND column_name = %s
+            LIMIT 1
+        """, (table, column)).fetchone()
+        exists = bool(row)
+    except Exception:
+        # Fallback: SQLite
+        try:
+            info = con.execute(f"PRAGMA table_info({table})").fetchall()
+            cols = {r[1] for r in info}
+            exists = column in cols
+        except Exception:
+            exists = False
+
+    if not exists:
+        # ghilimelele protejează nume de tabel/coloană în Postgres
+        con.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {sql_type}')
         con.commit()
 
 @toti_copiii_parintilor_bp.patch("/api/admin/parinte/<parent_username>")
@@ -200,7 +227,7 @@ def admin_update_parent(parent_username):
 
     new_username  = (data.get("new_username") or "").strip() or parent_username
     email         = (data.get("email") or None)
-    nume_complet  = (data.get("nume_complet") or "").strip() or None   # 👈 NOU
+    nume_complet  = (data.get("nume_complet") or "").strip() or None
 
     try:
         con = get_conn()
@@ -213,14 +240,14 @@ def admin_update_parent(parent_username):
         # dacă schimbăm username-ul, verificăm coliziuni
         if new_username.lower() != parent_username.lower():
             exists = con.execute(
-                "SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(?)",
+                "SELECT 1 FROM utilizatori WHERE LOWER(username)=LOWER(%s)",
                 (new_username,)
             ).fetchone()
             if exists:
                 return jsonify({"status":"error","message":"Username deja folosit."}), 409
 
         row = con.execute(
-            "SELECT id FROM utilizatori WHERE username=? AND LOWER(rol)='parinte'",
+            "SELECT id FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
             (parent_username,)
         ).fetchone()
         if not row:
@@ -228,18 +255,18 @@ def admin_update_parent(parent_username):
 
         # build dinamic (email poate fi None; nume_complet poate fi None)
         fields, values = [], []
-        fields.append("username = ?");     values.append(new_username)
-        fields.append("email = ?");        values.append(email)
-        fields.append("nume_complet = ?"); values.append(nume_complet)
+        fields.append("username = %s");     values.append(new_username)
+        fields.append("email = %s");        values.append(email)
+        fields.append("nume_complet = %s"); values.append(nume_complet)
 
         values.append(row["id"])
-        con.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = ?", values)
+        con.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s", values)
         con.commit()
         return jsonify({"status":"success"})
     except Exception as e:
         return jsonify({"status":"error","message":str(e)}), 500
 
-# ---------------- ADMIN: DELETE părinte (șterge rândul complet) ----------------
+# ---------------- ADMIN: DELETE părinte ----------------
 @toti_copiii_parintilor_bp.delete("/api/admin/parinte/<parent_username>")
 def admin_delete_parent(parent_username):
     data = request.get_json(silent=True) or {}
@@ -253,7 +280,7 @@ def admin_delete_parent(parent_username):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         cur = con.execute(
-            "DELETE FROM utilizatori WHERE username=? AND LOWER(rol)='parinte'",
+            "DELETE FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
             (parent_username,)
         )
         if cur.rowcount == 0:

@@ -1,3 +1,4 @@
+# backend/auth/inregistrare.py  (sau unde îl ai tu în proiect)
 import os
 import json
 from flask import Blueprint, request, jsonify
@@ -142,27 +143,43 @@ def register():
         cur = con.cursor()
 
         # Unicitate username/email atât în cereri_utilizatori cât și în utilizatori
-        cur.execute("SELECT 1 FROM cereri_utilizatori WHERE username = ? LIMIT 1", (username,))
+        cur.execute(
+            "SELECT 1 FROM cereri_utilizatori WHERE username = %s LIMIT 1",
+            (username,)
+        )
         if cur.fetchone():
             return jsonify({"status": "error", "message": "Username deja folosit (în cereri)"}), 409
 
-        cur.execute("SELECT 1 FROM utilizatori WHERE username = ? LIMIT 1", (username,))
+        cur.execute(
+            "SELECT 1 FROM utilizatori WHERE username = %s LIMIT 1",
+            (username,)
+        )
         if cur.fetchone():
             return jsonify({"status": "error", "message": "Username deja folosit"}), 409
 
-        cur.execute("SELECT 1 FROM cereri_utilizatori WHERE email = ? LIMIT 1", (email,))
+        cur.execute(
+            "SELECT 1 FROM cereri_utilizatori WHERE email = %s LIMIT 1",
+            (email,)
+        )
         if cur.fetchone():
             return jsonify({"status": "error", "message": "Email deja folosit (în cereri)"}), 409
 
-        cur.execute("SELECT 1 FROM utilizatori WHERE email = ? LIMIT 1", (email,))
+        cur.execute(
+            "SELECT 1 FROM utilizatori WHERE email = %s LIMIT 1",
+            (email,)
+        )
         if cur.fetchone():
             return jsonify({"status": "error", "message": "Email deja folosit"}), 409
 
         # Inserare cerere (copii/grupe pot fi NULL)
-        cur.execute("""
-            INSERT INTO cereri_utilizatori (username, email, parola, tip, varsta, copii, grupe, nume_complet)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (username, email, hashed_parola, tip, varsta, copii_json, grupe, full_name))
+        cur.execute(
+            """
+            INSERT INTO cereri_utilizatori
+                (username, email, parola, tip, varsta, copii, grupe, nume_complet)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (username, email, hashed_parola, tip, varsta, copii_json, grupe, full_name),
+        )
         con.commit()
 
     except Exception as e:

@@ -46,9 +46,9 @@ def update_inscriere(id):
         con = get_conn()
         con.execute("""
             UPDATE inscrieri_concursuri
-               SET nume = ?, gen = ?, categorie_varsta = ?, grad_centura = ?,
-                   greutate = ?, probe = ?, concurs = ?, data_nasterii = ?
-             WHERE id = ?
+               SET nume = %s, gen = %s, categorie_varsta = %s, grad_centura = %s,
+                   greutate = %s, probe = %s, concurs = %s, data_nasterii = %s
+             WHERE id = %s
         """, (
             data["nume"], data["gen"], data["categorie"], data["grad"],
             data["greutate"], data["probe"], data["concurs"], data["data_nasterii"], id
@@ -64,7 +64,7 @@ def update_inscriere(id):
 def delete_inscriere(id):
     try:
         con = get_conn()
-        cur = con.execute("DELETE FROM inscrieri_concursuri WHERE id = ?", (id,))
+        cur = con.execute("DELETE FROM inscrieri_concursuri WHERE id = %s", (id,))
         con.commit()
         if cur.rowcount == 0:
             return jsonify({"status": "error", "message": "Înscriere inexistentă"}), 404

@@ -21,7 +21,7 @@ def concurs_permis():
             FROM concursuri c
             JOIN concursuri_permisiuni cp ON c.id = cp.concurs_id
             JOIN utilizatori u ON u.id = cp.user_id
-            WHERE u.username = ?
+            WHERE u.username = %s
         """, (username,)).fetchall()
 
         concursuri = [{"nume": r["nume"], "perioada": r["perioada"], "locatie": r["locatie"]} for r in rows]
@@ -57,10 +57,10 @@ def set_permisiuni():
     try:
         con = get_conn()
         # Șterge toate permisiunile anterioare
-        con.execute("DELETE FROM concursuri_permisiuni WHERE user_id = ?", (user_id,))
+        con.execute("DELETE FROM concursuri_permisiuni WHERE user_id = %s", (user_id,))
         # Adaugă noile permisiuni
         con.executemany(
-            "INSERT INTO concursuri_permisiuni (user_id, concurs_id) VALUES (?, ?)",
+            "INSERT INTO concursuri_permisiuni (user_id, concurs_id) VALUES (%s, %s)",
             [(user_id, int(cid)) for cid in concurs_ids]
         )
         con.commit()
@@ -82,7 +82,7 @@ def get_permisiuni_antrenor(username: str):
             SELECT cp.concurs_id
             FROM concursuri_permisiuni cp
             JOIN utilizatori u ON cp.user_id = u.id
-            WHERE u.username = ?
+            WHERE u.username = %s
         """, (username,)).fetchall()
         return jsonify([r["concurs_id"] for r in rows])
     except Exception as e:

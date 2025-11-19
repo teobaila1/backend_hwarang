@@ -64,7 +64,7 @@ def antrenor_dashboard_data():
     try:
         # 1) Grupele antrenorului -> set normalizat "Grupa N"
         tr = con.execute(
-            "SELECT grupe FROM utilizatori WHERE LOWER(rol)='antrenor' AND username = ?",
+            "SELECT grupe FROM utilizatori WHERE LOWER(rol)='antrenor' AND username = %s",
             (trainer_username,)
         ).fetchone()
         if not tr:
@@ -157,7 +157,7 @@ def copiii_mei():
         con = get_conn()
         cur = con.cursor()
         cur.execute(
-            "SELECT copii FROM utilizatori WHERE username = ? AND LOWER(rol) = 'parinte'",
+            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) = 'parinte'",
             (username,)
         )
         row = cur.fetchone()
@@ -175,7 +175,7 @@ def copiii_mei():
         changed, copii = ensure_child_ids_and_normalize(copii)
         if changed:
             cur.execute(
-                "UPDATE utilizatori SET copii = ? WHERE username = ?",
+                "UPDATE utilizatori SET copii = %s WHERE username = %s",
                 (json.dumps(copii, ensure_ascii=False), username)
             )
             con.commit()
