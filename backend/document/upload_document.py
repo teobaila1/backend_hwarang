@@ -20,7 +20,7 @@ def _ensure_table_exists():
     con = get_conn()
     con.execute("""
         CREATE TABLE IF NOT EXISTS documente (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY AUTOINCREMENT,
             filename   TEXT NOT NULL,
             uploaded_by TEXT,
             upload_date TEXT
@@ -32,7 +32,7 @@ def _ensure_table_exists():
 
 def _migrate_if_needed():
     """
-    Dacă 'id' nu e PRIMARY KEY INTEGER, recreează tabela corect și copiază datele.
+    Dacă 'id' nu e PRIMARY KEY SERIAL, recreează tabela corect și copiază datele.
     (CREATE TABLE IF NOT EXISTS nu face migrare.)
     """
     con = get_conn()
@@ -43,13 +43,13 @@ def _migrate_if_needed():
     if "id" in cols:
         id_type = (cols["id"][2] or "").upper()
         id_pk = cols["id"][5] == 1
-        id_ok = id_type.startswith("INTEGER") and id_pk
+        id_ok = id_type.startswith("SERIAL") and id_pk
 
     if not id_ok:
         con.execute("BEGIN")
         con.execute("""
             CREATE TABLE IF NOT EXISTS documente_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY AUTOINCREMENT,
                 filename   TEXT NOT NULL,
                 uploaded_by TEXT,
                 upload_date TEXT

@@ -11,8 +11,8 @@ def ensure_tables():
     con = get_conn()
     con.execute("""
         CREATE TABLE IF NOT EXISTS plati (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parinte_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY AUTOINCREMENT,
+            parinte_id SERIAL NOT NULL,
             copil_nume TEXT NOT NULL,
             luna TEXT,
             suma REAL,
