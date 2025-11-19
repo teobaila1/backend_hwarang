@@ -16,53 +16,53 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ---------------- DB helpers ----------------
-def _ensure_table_exists():
-    con = get_conn()
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS documente (
-            id SERIAL PRIMARY KEY AUTOINCREMENT,
-            filename   TEXT NOT NULL,
-            uploaded_by TEXT,
-            upload_date TEXT
-        )
-    """)
-    con.commit()
-    _migrate_if_needed()  # asigură PK pe 'id'
+# def _ensure_table_exists():
+#     con = get_conn()
+#     con.execute("""
+#         CREATE TABLE IF NOT EXISTS documente (
+#             id SERIAL PRIMARY KEY AUTOINCREMENT,
+#             filename   TEXT NOT NULL,
+#             uploaded_by TEXT,
+#             upload_date TEXT
+#         )
+#     """)
+#     con.commit()
+#     _migrate_if_needed()  # asigură PK pe 'id'
 
 
-def _migrate_if_needed():
-    """
-    Dacă 'id' nu e PRIMARY KEY SERIAL, recreează tabela corect și copiază datele.
-    (CREATE TABLE IF NOT EXISTS nu face migrare.)
-    """
-    con = get_conn()
-    info = con.execute("PRAGMA table_info(documente)").fetchall()
-    cols = {row[1]: row for row in info}  # (cid, name, type, notnull, dflt_value, pk)
-
-    id_ok = False
-    if "id" in cols:
-        id_type = (cols["id"][2] or "").upper()
-        id_pk = cols["id"][5] == 1
-        id_ok = id_type.startswith("SERIAL") and id_pk
-
-    if not id_ok:
-        con.execute("BEGIN")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS documente_new (
-                id SERIAL PRIMARY KEY AUTOINCREMENT,
-                filename   TEXT NOT NULL,
-                uploaded_by TEXT,
-                upload_date TEXT
-            )
-        """)
-        # copiem datele (id-urile vor fi regenerate automat)
-        con.execute("""
-            INSERT INTO documente_new (filename, uploaded_by, upload_date)
-            SELECT filename, uploaded_by, upload_date FROM documente
-        """)
-        con.execute("DROP TABLE documente")
-        con.execute("ALTER TABLE documente_new RENAME TO documente")
-        con.commit()
+# def _migrate_if_needed():
+#     """
+#     Dacă 'id' nu e PRIMARY KEY SERIAL, recreează tabela corect și copiază datele.
+#     (CREATE TABLE IF NOT EXISTS nu face migrare.)
+#     """
+#     con = get_conn()
+#     info = con.execute("PRAGMA table_info(documente)").fetchall()
+#     cols = {row[1]: row for row in info}  # (cid, name, type, notnull, dflt_value, pk)
+#
+#     id_ok = False
+#     if "id" in cols:
+#         id_type = (cols["id"][2] or "").upper()
+#         id_pk = cols["id"][5] == 1
+#         id_ok = id_type.startswith("SERIAL") and id_pk
+#
+#     if not id_ok:
+#         con.execute("BEGIN")
+#         con.execute("""
+#             CREATE TABLE IF NOT EXISTS documente_new (
+#                 id SERIAL PRIMARY KEY AUTOINCREMENT,
+#                 filename   TEXT NOT NULL,
+#                 uploaded_by TEXT,
+#                 upload_date TEXT
+#             )
+#         """)
+#         # copiem datele (id-urile vor fi regenerate automat)
+#         con.execute("""
+#             INSERT INTO documente_new (filename, uploaded_by, upload_date)
+#             SELECT filename, uploaded_by, upload_date FROM documente
+#         """)
+#         con.execute("DROP TABLE documente")
+#         con.execute("ALTER TABLE documente_new RENAME TO documente")
+#         con.commit()
 
 
 def _unique_filename(dest_dir: Path, filename: str) -> str:
@@ -100,7 +100,7 @@ def upload_documents():
         return jsonify({'status': 'error', 'message': 'Missing files or username'}), 400
 
     try:
-        _ensure_table_exists()
+        #_ensure_table_exists()
         con = get_conn()
 
         saved = []
@@ -142,7 +142,7 @@ def download_file_by_id(doc_id):
 @upload_document_bp.get('/api/get_documents')
 def get_documents():
     try:
-        _ensure_table_exists()
+        #_ensure_table_exists()
         con = get_conn()
         docs = con.execute("""
             SELECT id,

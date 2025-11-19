@@ -6,22 +6,22 @@ evidenta_plati_bp = Blueprint("evidenta_plati", __name__)
 
 # --- helpers --------------------------------------------------------------
 
-def ensure_tables():
-    """Creează tabela plati dacă nu există."""
-    con = get_conn()
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS plati (
-            id SERIAL PRIMARY KEY AUTOINCREMENT,
-            parinte_id SERIAL NOT NULL,
-            copil_nume TEXT NOT NULL,
-            luna TEXT,
-            suma REAL,
-            tip_plata TEXT,
-            status TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    con.commit()
+# def ensure_tables():
+#     """Creează tabela plati dacă nu există."""
+#     con = get_conn()
+#     con.execute("""
+#         CREATE TABLE IF NOT EXISTS plati (
+#             id SERIAL PRIMARY KEY AUTOINCREMENT,
+#             parinte_id SERIAL NOT NULL,
+#             copil_nume TEXT NOT NULL,
+#             luna TEXT,
+#             suma REAL,
+#             tip_plata TEXT,
+#             status TEXT,
+#             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+#         )
+#     """)
+#     con.commit()
 
 def _safe_load_children(copii_json):
     if not copii_json:
@@ -58,7 +58,7 @@ def get_plati_filtrate():
       - parinte_display -> COALESCE(nume_complet, username)
     """
     try:
-        ensure_tables()
+       # ensure_tables()
         con = get_conn()
 
         # Plăți existente (cu username și nume de afișat)
@@ -112,7 +112,7 @@ def get_plati_filtrate():
 @evidenta_plati_bp.get("/api/plati")
 def get_plati():
     try:
-        ensure_tables()
+        #ensure_tables()
         con = get_conn()
         rows = con.execute("""
             SELECT
@@ -145,7 +145,7 @@ def add_plata():
         return jsonify({"error": "Parinte necunoscut pentru copilul dat"}), 400
 
     try:
-        ensure_tables()
+        #ensure_tables()
         con = get_conn()
 
         # Dacă există deja o plată pentru același copil + lună -> UPDATE
@@ -180,7 +180,7 @@ def update_plata(id):
     data = request.get_json(silent=True) or {}
 
     try:
-        ensure_tables()
+        #ensure_tables()
         con = get_conn()
 
         exista = con.execute("SELECT id FROM plati WHERE id = ?", (id,)).fetchone()
@@ -224,7 +224,7 @@ def update_plata(id):
 @evidenta_plati_bp.delete("/api/plati/<int:id>")
 def delete_plata(id):
     try:
-        ensure_tables()
+       # ensure_tables()
         con = get_conn()
         con.execute("DELETE FROM plati WHERE id = ?", (id,))
         con.commit()
