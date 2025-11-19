@@ -1,7 +1,7 @@
 import os
 from flask import Blueprint, request, jsonify
 
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 from ..mails.emailer import send_email_http
 
 inscriere_bp = Blueprint("inscriere", __name__)

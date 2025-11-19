@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from ..config import get_conn, DB_PATH  # o singură sursă pentru DB
+from ..config import get_conn  # o singură sursă pentru DB
 
 concurs_permis_antrenori_externi_bp = Blueprint("concurs_permis_antrenori_externi", __name__)
 

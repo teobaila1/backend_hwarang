@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from ..config import get_conn, DB_PATH  # o singură sursă pentru DB
+from ..config import get_conn  # o singură sursă pentru DB
 
 modifica_rol_bp = Blueprint("modifica_rol", __name__)
 

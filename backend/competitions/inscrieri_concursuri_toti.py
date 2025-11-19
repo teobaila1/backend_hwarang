@@ -1,10 +1,8 @@
 from flask import jsonify, Blueprint, request
-from ..config import get_conn, DB_PATH  # ← o singură sursă pentru DB
+from ..config import get_conn  # ← o singură sursă pentru DB
 
 inscriere_concurs_toti_bp = Blueprint('inscriere_concurs_toti', __name__)
 
-# (opțional) vezi în consolă ce DB folosește acest modul
-print(f"[BOOT] inscrieri_concursuri_toti folosește DB: {DB_PATH}")
 
 @inscriere_concurs_toti_bp.get("/api/inscrisi_concursuri")
 def inscrisi_concursuri():

@@ -122,7 +122,7 @@ import os
 from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 from ..mails.emailer import send_email_http
 from ..passwords.security import hash_password
 
@@ -137,10 +137,6 @@ FRONTEND_URL = os.getenv(
     "https://hwarang.ro"
 ).rstrip("/")
 
-
-@resetare_bp.get("/api/test-connection")
-def test_connection():
-    return jsonify({"status": "success", "message": "Backend is running", "db": str(DB_PATH)}), 200
 
 
 # 📨 Cerere resetare parolă

@@ -3,7 +3,7 @@ import re
 import uuid
 import json
 from flask import request, jsonify, Blueprint
-from ..config import get_conn, DB_PATH  # ✅ sursă unică pentru DB
+from ..config import get_conn  # ✅ sursă unică pentru DB
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
 

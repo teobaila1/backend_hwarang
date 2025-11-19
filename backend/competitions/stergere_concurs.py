@@ -1,5 +1,6 @@
+# backend/competitions/stergere_concurs.py
 from flask import Blueprint, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 import urllib.parse
 
 stergere_concurs_bp = Blueprint('stergere_concurs', __name__)
@@ -11,41 +12,49 @@ def delete_concurs(nume: str):
         return jsonify({"status": "error", "message": "Numele concursului lipsește."}), 400
 
     try:
-        con = get_conn()
+        with get_conn() as con:
+            with con.cursor() as cur:
+                # 1) Căutăm concursul (case-insensitive)
+                cur.execute(
+                    "SELECT id, nume FROM concursuri WHERE LOWER(nume) = LOWER(%s) LIMIT 1",
+                    (decoded_name,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Concursul nu a fost găsit."
+                    }), 404
 
-        # 1) Căutăm concursul (case-insensitive)
-        row = con.execute(
-            "SELECT id, nume FROM concursuri WHERE LOWER(nume) = LOWER(?) LIMIT 1",
-            (decoded_name,)
-        ).fetchone()
-        if not row:
-            return jsonify({"status": "error", "message": "Concursul nu a fost găsit."}), 404
+                concurs_id = row["id"]
+                nume_concurs = row["nume"]
 
-        concurs_id = row["id"]
+                # 2) Ștergem înscrierile aferente (după nume concurs)
+                cur.execute(
+                    "DELETE FROM inscrieri_concursuri WHERE concurs = %s",
+                    (nume_concurs,),
+                )
 
-        # 2) Ștergem înscrierile aferente (după nume concurs)
-        con.execute(
-            "DELETE FROM inscrieri_concursuri WHERE concurs = ?",
-            (row["nume"],)
-        )
+                # 3) Ștergem permisiunile aferente (dacă există tabela)
+                cur.execute("""
+                    SELECT to_regclass('public.concursuri_permisiuni') AS t
+                """)
+                tbl = cur.fetchone()
+                if tbl and tbl["t"]:
+                    cur.execute(
+                        "DELETE FROM concursuri_permisiuni WHERE concurs_id = %s",
+                        (concurs_id,),
+                    )
 
-        # 3) (opțional) Ștergem permisiunile aferente (dacă există tabela)
-        tbl = con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='concursuri_permisiuni'"
-        ).fetchone()
-        if tbl:
-            con.execute(
-                "DELETE FROM concursuri_permisiuni WHERE concurs_id = ?",
-                (concurs_id,)
-            )
-
-        # 4) Ștergem concursul
-        con.execute("DELETE FROM concursuri WHERE id = ?", (concurs_id,))
-        con.commit()
+                # 4) Ștergem concursul
+                cur.execute(
+                    "DELETE FROM concursuri WHERE id = %s",
+                    (concurs_id,),
+                )
 
         return jsonify({
             "status": "success",
-            "message": f'Concursul „{row["nume"]}” și înscrierile aferente au fost șterse.'
+            "message": f'Concursul „{nume_concurs}” și înscrierile aferente au fost șterse.'
         }), 200
 
     except Exception as e:

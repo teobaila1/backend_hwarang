@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 
 numar_inscrisi_bp = Blueprint('numar_inscrisi', __name__)
 

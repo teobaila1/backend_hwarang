@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 import json as _json
 
 evidenta_plati_bp = Blueprint("evidenta_plati", __name__)

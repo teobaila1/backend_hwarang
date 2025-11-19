@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from ..config import get_conn, DB_PATH  # o singură sursă pentru DB
+from ..config import get_conn  # o singură sursă pentru DB
 
 inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 
@@ -42,20 +42,20 @@ def inscriere_concurs():
 
         # Asigurăm tabela (include și 'gen')
         con.execute("""
-            CREATE TABLE IF NOT EXISTS inscrieri_concursuri (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                email           TEXT,
-                username        TEXT,
-                concurs         TEXT,
-                nume            TEXT,
-                data_nasterii   TEXT,
-                categorie_varsta TEXT,
-                grad_centura    TEXT,
-                greutate        TEXT,
-                probe           TEXT,
-                gen             TEXT
-            )
-        """)
+                    CREATE TABLE IF NOT EXISTS inscrieri_concursuri (
+                        id               SERIAL PRIMARY KEY,
+                        email            TEXT,
+                        username         TEXT,
+                        concurs          TEXT,
+                        nume             TEXT,
+                        data_nasterii    TEXT,
+                        categorie_varsta TEXT,
+                        grad_centura     TEXT,
+                        greutate         TEXT,
+                        probe            TEXT,
+                        gen              TEXT
+                    )
+                """)
 
         # Inserăm cererea
         con.execute("""

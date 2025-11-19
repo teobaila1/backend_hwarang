@@ -25,7 +25,7 @@ from backend.users.elevi import elevi_bp
 import os
 
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
+
 app = Flask(__name__)
 # ✅ Setezi CORS pentru local și Netlify
 CORS(app, resources={r"/api/*": {"origins": [

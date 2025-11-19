@@ -22,15 +22,15 @@
 
 
 
-import sqlite3, pathlib
-
-DB_PATH = pathlib.Path(r"C:\Users\Teo\Desktop\Site_Hwarang\vite_hwarang_react\backend\users.db")
-sql = pathlib.Path("migration_utilizatori_autoincrement.sql").read_text(encoding="utf-8")
-
-con = sqlite3.connect(DB_PATH)
-try:
-    con.executescript(sql)
-    con.commit()
-    print("Migrare OK.")
-finally:
-    con.close()
+# import sqlite3, pathlib
+#
+# DB_PATH = pathlib.Path(r"C:\Users\Teo\Desktop\Site_Hwarang\vite_hwarang_react\backend\users.db")
+# sql = pathlib.Path("migration_utilizatori_autoincrement.sql").read_text(encoding="utf-8")
+#
+# con = sqlite3.connect(DB_PATH)
+# try:
+#     con.executescript(sql)
+#     con.commit()
+#     print("Migrare OK.")
+# finally:
+#     con.close()

@@ -2,7 +2,7 @@
 import json
 import re
 from flask import Blueprint, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 
 toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
 

@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 from datetime import date
 
 creare_get_concurs_bp = Blueprint('creare_get_concurs', __name__)

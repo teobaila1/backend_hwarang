@@ -1,6 +1,6 @@
 # backend/users/cereri_utilizatori.py
 from flask import Blueprint, request, jsonify
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 from ..accounts.inregistrare import trimite_email_acceptare, trimite_email_respingere
 
 cereri_utilizatori_bp = Blueprint("cereri_utilizatori", __name__)

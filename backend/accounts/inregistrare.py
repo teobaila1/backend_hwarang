@@ -2,7 +2,7 @@ import os
 import json
 from flask import Blueprint, request, jsonify
 
-from ..config import get_conn, DB_PATH
+from ..config import get_conn
 from ..passwords.security import hash_password
 from ..mails.emailer import send_email_http
 
