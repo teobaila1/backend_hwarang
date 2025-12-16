@@ -3,6 +3,23 @@ from pathlib import Path
 import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import socket  # <--- IMPORT IMPORTANT
+
+
+# --- FIX PENTRU RENDER + SUPABASE (IPv6 issue) ---
+# Acest cod forteaza aplicatia sa foloseasca IPv4.
+# Rezolva eroarea "Network is unreachable".
+try:
+    old_getaddrinfo = socket.getaddrinfo
+    def new_getaddrinfo(*args, **kwargs):
+        res = old_getaddrinfo(*args, **kwargs)
+        # Filtram doar adresele AF_INET (adica IPv4)
+        return [r for r in res if r[0] == socket.AF_INET]
+    socket.getaddrinfo = new_getaddrinfo
+except Exception as e:
+    print(f"Nu am putut aplica patch-ul IPv4: {e}")
+# -------------------------------------------------
+
 
 # Postgres (Render)
 DATABASE_URL = os.getenv("DATABASE_URL")
