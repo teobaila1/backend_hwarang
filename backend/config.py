@@ -68,8 +68,16 @@ def _connect_postgres() -> DBConn:
         raise RuntimeError(
             "DATABASE_URL nu este setat. Adaugă-l în Environment-ul serviciului de backend."
         )
-    raw = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return DBConn(raw)
+    try:
+        # Aici încercăm conexiunea și prindem eroarea dacă apare
+        print(f"DEBUG: Incerc conectarea la Postgres...", flush=True)
+        raw = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        print("DEBUG: Conexiune REUSITA!", flush=True)
+        return DBConn(raw)
+    except Exception as e:
+        # Aici este cheia: printăm eroarea exactă în log-uri
+        print(f"!!! EROARE CRITICA LA CONECTARE: {e}", flush=True)
+        raise e
 
 
 def _connect_sqlite() -> DBConn:
