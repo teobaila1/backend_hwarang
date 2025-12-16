@@ -31,6 +31,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:5173",
     "https://hwarang.ro"
+    "https://www.hwarang.ro"  # 👈 Adaugă neapărat varianta asta
 ]}})
 
 app.register_blueprint(inscriere_bp)
