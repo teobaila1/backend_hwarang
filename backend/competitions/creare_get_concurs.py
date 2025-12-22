@@ -70,12 +70,14 @@ def get_concursuri():
     ]
     """
     con = get_conn()
-    rows = con.execute("SELECT nume, perioada, locatie FROM concursuri").fetchall()
+    # --- MODIFICARE AICI: Selectam si cere_inaltime ---
+    rows = con.execute("SELECT nume, perioada, locatie, cere_inaltime FROM concursuri").fetchall()
 
     data = [{
         "nume": r["nume"],
         "perioada": r["perioada"],
         "locatie": r["locatie"],
+        "cere_inaltime": r["cere_inaltime"],  # --- MODIFICARE AICI ---
         "dataStart": extract_data_start(r["perioada"])
     } for r in rows]
 

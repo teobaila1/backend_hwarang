@@ -22,7 +22,7 @@ def inscrisi_concurs(nume_concurs: str):
     try:
         con = get_conn()
         rows = con.execute("""
-            SELECT nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen
+            SELECT nume, data_nasterii, categorie_varsta, grad_centura, greutate, inaltime, probe, gen
             FROM inscrieri_concursuri
             WHERE concurs = %s
             ORDER BY id DESC
@@ -34,6 +34,7 @@ def inscrisi_concurs(nume_concurs: str):
             "categorie_varsta": r["categorie_varsta"],
             "grad_centura": r["grad_centura"],
             "greutate": r["greutate"],
+            "inaltime": r["inaltime"],  # --- MODIFICARE AICI ---
             "probe": r["probe"],
             "gen": r["gen"],
         } for r in rows]

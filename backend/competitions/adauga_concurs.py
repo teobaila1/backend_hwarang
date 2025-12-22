@@ -9,6 +9,9 @@ def adauga_concurs():
     nume = (data.get('nume') or '').strip()
     perioada = (data.get('perioada') or '').strip()
     locatie = (data.get('locatie') or '').strip()
+    # --- MODIFICARE AICI: Citim bifa ---
+    cere_inaltime = data.get('cere_inaltime', False)
+    # -----------------------------------
 
     if not nume or not perioada or not locatie:
         return jsonify({"status": "error", "message": "Câmpuri obligatorii: nume, perioada, locatie"}), 400
@@ -27,8 +30,8 @@ def adauga_concurs():
             return jsonify({"status": "error", "message": "Concurs deja existent"}), 409
 
         con.execute(
-            "INSERT INTO concursuri (nume, perioada, locatie) VALUES (%s, %s, %s)",
-            (nume, perioada, locatie)
+            "INSERT INTO concursuri (nume, perioada, locatie, cere_inaltime) VALUES (%s, %s, %s, %s)",
+            (nume, perioada, locatie, cere_inaltime)
         )
         con.commit()
 

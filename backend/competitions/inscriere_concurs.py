@@ -16,6 +16,9 @@ def inscriere_concurs():
     categorie_varsta= (data.get("categorieVarsta") or "").strip()
     grad_centura    = (data.get("gradCentura")     or "").strip()
     greutate        = (data.get("greutate")        or "").strip()
+    # --- MODIFICARE AICI: Citim inaltimea ---
+    inaltime = (data.get("inaltime") or "").strip()
+    # ----------------------------------------
     probe           = data.get("probe")  # poate fi listă sau string
     gen             = (data.get("gen")            or "").strip()
 
@@ -52,6 +55,7 @@ def inscriere_concurs():
                         categorie_varsta TEXT,
                         grad_centura     TEXT,
                         greutate         TEXT,
+                        inaltime         TEXT,
                         probe            TEXT,
                         gen              TEXT
                     )
@@ -60,10 +64,10 @@ def inscriere_concurs():
         # Inserăm cererea
         con.execute("""
             INSERT INTO inscrieri_concursuri
-                (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen)
+                (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, inaltime, probe, gen)
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, probe, gen))
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, inaltime, probe, gen))
         con.commit()
 
         return jsonify({"status": "success", "message": f"Cererea pentru „{concurs}” a fost trimisă!"}), 201
