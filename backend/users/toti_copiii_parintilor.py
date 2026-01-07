@@ -79,7 +79,7 @@ def adauga_copil():
     try:
         con = get_conn()
         row = con.execute(
-            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) = 'parinte'",
+            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) IN ('parinte', 'admin')",
             (username,)
         ).fetchone()
         if not row:
