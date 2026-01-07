@@ -41,7 +41,7 @@ def toti_copiii():
             nume_complet,
             COALESCE(nume_complet, username) AS display_name
           FROM utilizatori
-          WHERE LOWER(rol)='parinte' AND copii IS NOT NULL
+          WHERE LOWER(rol) IN ('parinte', 'admin') AND copii IS NOT NULL
         """).fetchall()
 
         rezultate = []
