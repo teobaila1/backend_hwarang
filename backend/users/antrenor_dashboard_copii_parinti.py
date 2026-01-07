@@ -157,7 +157,7 @@ def copiii_mei():
         con = get_conn()
         cur = con.cursor()
         cur.execute(
-            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) = 'parinte'",
+            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) IN ('parinte', 'admin')",
             (username,)
         )
         row = cur.fetchone()
