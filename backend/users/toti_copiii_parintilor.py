@@ -129,7 +129,7 @@ def admin_update_child(child_id):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
+            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
             (parent_username,)
         ).fetchone()
         if not r:
@@ -165,7 +165,7 @@ def admin_delete_child(child_id):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
+            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
             (parent_username,)
         ).fetchone()
         if not r:
@@ -247,7 +247,7 @@ def admin_update_parent(parent_username):
                 return jsonify({"status":"error","message":"Username deja folosit."}), 409
 
         row = con.execute(
-            "SELECT id FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
+            "SELECT id FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
             (parent_username,)
         ).fetchone()
         if not row:
@@ -280,7 +280,7 @@ def admin_delete_parent(parent_username):
             return jsonify({"status":"error","message":"Doar adminul are voie."}), 403
 
         cur = con.execute(
-            "DELETE FROM utilizatori WHERE username=%s AND LOWER(rol)='parinte'",
+            "DELETE FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
             (parent_username,)
         )
         if cur.rowcount == 0:
