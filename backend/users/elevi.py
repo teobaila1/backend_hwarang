@@ -117,3 +117,56 @@ def delete_student(elev_id):
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# --- Adaugă la finalul fișierului elevi.py ---
+
+@elevi_bp.get("/api/profil/sugestii_inscriere")
+def sugestii_inscriere():
+    username = request.args.get('username')
+
+    if not username:
+        return jsonify({"status": "error", "message": "Username lipsă"}), 400
+
+    try:
+        con = get_conn()
+
+        # 1. Aflăm ID-ul și Rolul utilizatorului pe baza username-ului
+        # Presupunem că tabela de useri se numește 'utilizatori'
+        user = con.execute("SELECT id, rol, nume_complet FROM utilizatori WHERE username = %s", (username,)).fetchone()
+
+        if not user:
+            return jsonify({"status": "error", "message": "Utilizator negăsit"}), 404
+
+        user_id = user['id']
+        rol = (user['rol'] or "").lower()
+        nume_propriu = user['nume_complet'] or username
+        lista_copii = []
+
+        # 2. Dacă e Părinte sau Admin, luăm copiii din tabela 'copii'
+        if rol in ['parinte', 'admin']:
+            # Căutăm copiii asociați acestui cont (parinte_id)
+            rows = con.execute("""
+                SELECT nume, prenume, grupa 
+                FROM copii 
+                WHERE parinte_id = %s
+            """, (user_id,)).fetchall()
+
+            for r in rows:
+                nume_full = f"{r['nume']} {r['prenume']}".strip()
+                lista_copii.append({
+                    "nume": nume_full,
+                    "grupa": r.get('grupa', '')
+                })
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "rol": rol,
+                "nume_propriu": nume_propriu,
+                "copii": lista_copii
+            }
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
