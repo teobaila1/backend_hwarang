@@ -1,4 +1,5 @@
 # backend/users/elevi.py
+import json
 import re
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
@@ -131,44 +132,47 @@ def sugestii_inscriere():
     try:
         con = get_conn()
 
-        # 1. Căutăm utilizatorul (folosim 'utilizatori' sau numele corect al tabelei tale de useri)
+        # 1. Căutăm utilizatorul și coloana 'copii' direct din tabela 'utilizatori'
         row_user = con.execute(
-            "SELECT id, rol, nume_complet FROM utilizatori WHERE username = %s",
+            "SELECT id, rol, nume_complet, copii FROM utilizatori WHERE username = %s",
             (username,)
         ).fetchone()
 
         if not row_user:
             return jsonify({"status": "error", "message": "Utilizator negăsit"}), 404
 
-        # FIX CRITIC: Convertim imediat în dict pentru a evita erorile de tip row
         user = dict(row_user)
-
-        user_id = user['id']
-        rol = (user['rol'] or "").lower()
-        nume_propriu = user['nume_complet'] or username
+        rol = (user.get('rol') or "").lower()
+        nume_propriu = user.get('nume_complet') or username
         lista_copii = []
 
-        # 2. Dacă e Părinte sau Admin, luăm copiii din tabela 'copii'
+        # 2. Dacă e Părinte sau Admin, procesăm JSON-ul din coloana 'copii'
         if rol in ['parinte', 'admin']:
-            rows = con.execute("""
-                SELECT nume, prenume, grupa 
-                FROM copii 
-                WHERE parinte_id = %s
-            """, (user_id,)).fetchall()
+            copii_raw = user.get('copii')
 
-            for r in rows:
-                # FIX CRITIC: Convertim rândul în dict standard Python
-                child = dict(r)
+            if copii_raw:
+                try:
+                    # Dacă e string (text în DB), îl transformăm în listă
+                    if isinstance(copii_raw, str):
+                        date_copii = json.loads(copii_raw)
+                    else:
+                        # Uneori driverul face conversia automat
+                        date_copii = copii_raw
 
-                nume_full = f"{child['nume']} {child['prenume']}".strip()
-
-                # Acum putem folosi .get() în siguranță pe obiectul dict
-                grupa = child.get('grupa') or ""
-
-                lista_copii.append({
-                    "nume": nume_full,
-                    "grupa": grupa
-                })
+                    # Extragem doar ce ne trebuie (Nume și Grupă)
+                    if isinstance(date_copii, list):
+                        for c in date_copii:
+                            # Din JSON-ul tău: {"id": "...", "nume": "PATRIK...", "grupa": "..."}
+                            nume = c.get('nume', '').strip()
+                            grupa = c.get('grupa', '')
+                            if nume:
+                                lista_copii.append({
+                                    "nume": nume,
+                                    "grupa": grupa
+                                })
+                except Exception as e_json:
+                    print(f"Eroare parsing JSON copii: {e_json}")
+                    # Nu crăpăm tot requestul, doar returnăm lista goală dacă JSON-ul e corupt
 
         return jsonify({
             "status": "success",
@@ -180,5 +184,5 @@ def sugestii_inscriere():
         })
 
     except Exception as e:
-        print(f"Eroare SQL sugestii: {e}")  # Apare în logurile serverului (Render)
+        print(f"Eroare server sugestii: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
