@@ -119,7 +119,7 @@ def delete_student(elev_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- Adaugă la finalul fișierului elevi.py ---
+# --- Adaugă sau înlocuiește la finalul fișierului elevi.py ---
 
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 def sugestii_inscriere():
@@ -131,12 +131,17 @@ def sugestii_inscriere():
     try:
         con = get_conn()
 
-        # 1. Aflăm ID-ul și Rolul utilizatorului pe baza username-ului
-        # Presupunem că tabela de useri se numește 'utilizatori'
-        user = con.execute("SELECT id, rol, nume_complet FROM utilizatori WHERE username = %s", (username,)).fetchone()
+        # 1. Căutăm utilizatorul (folosim 'utilizatori' sau numele corect al tabelei tale de useri)
+        row_user = con.execute(
+            "SELECT id, rol, nume_complet FROM utilizatori WHERE username = %s",
+            (username,)
+        ).fetchone()
 
-        if not user:
+        if not row_user:
             return jsonify({"status": "error", "message": "Utilizator negăsit"}), 404
+
+        # FIX CRITIC: Convertim imediat în dict pentru a evita erorile de tip row
+        user = dict(row_user)
 
         user_id = user['id']
         rol = (user['rol'] or "").lower()
@@ -145,7 +150,6 @@ def sugestii_inscriere():
 
         # 2. Dacă e Părinte sau Admin, luăm copiii din tabela 'copii'
         if rol in ['parinte', 'admin']:
-            # Căutăm copiii asociați acestui cont (parinte_id)
             rows = con.execute("""
                 SELECT nume, prenume, grupa 
                 FROM copii 
@@ -153,10 +157,17 @@ def sugestii_inscriere():
             """, (user_id,)).fetchall()
 
             for r in rows:
-                nume_full = f"{r['nume']} {r['prenume']}".strip()
+                # FIX CRITIC: Convertim rândul în dict standard Python
+                child = dict(r)
+
+                nume_full = f"{child['nume']} {child['prenume']}".strip()
+
+                # Acum putem folosi .get() în siguranță pe obiectul dict
+                grupa = child.get('grupa') or ""
+
                 lista_copii.append({
                     "nume": nume_full,
-                    "grupa": r.get('grupa', '')
+                    "grupa": grupa
                 })
 
         return jsonify({
@@ -169,4 +180,5 @@ def sugestii_inscriere():
         })
 
     except Exception as e:
+        print(f"Eroare SQL sugestii: {e}")  # Apare în logurile serverului (Render)
         return jsonify({"status": "error", "message": str(e)}), 500
