@@ -22,12 +22,11 @@ def _safe_load_list(s):
         return []
 
 
-# --- 1. GET: Returnează toți elevii (din JSON-urile părinților) ---
+# --- 1. GET: Returnează toți elevii ---
 @elevi_bp.get("/api/elevi")
 def get_students():
     con = get_conn()
     try:
-        # Căutăm doar utilizatorii care au ceva în coloana copii
         rows = con.execute("""
             SELECT id, nume_complet, username, copii 
             FROM utilizatori 
@@ -36,17 +35,15 @@ def get_students():
 
         toti_elevii = []
         for r in rows:
-            # Convertim rândul în dict pentru siguranță
+            # Convertim în dict pentru siguranță
             row_dict = dict(r)
             parinte_nume = row_dict.get("nume_complet") or row_dict.get("username")
             parinte_id = row_dict.get("id")
 
-            copii_raw = row_dict.get("copii")
-            copii_list = _safe_load_list(copii_raw)
+            copii_list = _safe_load_list(row_dict.get("copii"))
 
             for copil in copii_list:
                 if isinstance(copil, dict):
-                    # Adăugăm info despre părinte pentru afișare în tabel
                     copil["parinte_id"] = parinte_id
                     copil["parinte_nume"] = parinte_nume
                     toti_elevii.append(copil)
@@ -57,17 +54,20 @@ def get_students():
         return jsonify([])
 
 
-# --- 2. POST: Adaugă un elev (Actualizează JSON-ul părintelui) ---
+# --- 2. POST: Adaugă un elev ---
 @elevi_bp.post("/api/elevi")
 def add_student():
     data = request.get_json(silent=True) or {}
     print(f"DEBUG: Date primite la POST /api/elevi: {data}")
 
+    # Preluăm datele EXACT cum vin din frontend
     nume_elev = _normalize(data.get("nume"))
     varsta = data.get("varsta")
     gen = data.get("gen")
     grupa = data.get("grupa")
-    nume_parinte = _normalize(data.get("nume_parinte"))
+
+    # FIX: Aici era problema - frontend trimite 'parinte_nume', nu 'nume_parinte'
+    nume_parinte = _normalize(data.get("parinte_nume"))
 
     if not nume_elev:
         return jsonify({"status": "error", "message": "Numele elevului este obligatoriu."}), 400
@@ -77,7 +77,7 @@ def add_student():
 
     con = get_conn()
     try:
-        # Căutăm părintele existent
+        # Căutăm părintele existent după nume
         row = con.execute("""
             SELECT id, copii FROM utilizatori 
             WHERE LOWER(username) = LOWER(%s) OR LOWER(nume_complet) = LOWER(%s)
@@ -97,7 +97,6 @@ def add_student():
                 RETURNING id
             """, (nume_parinte, nume_parinte, claim_code))
 
-            # Gestionăm returnarea ID-ului (diferă uneori între drivere)
             try:
                 new_row = cur.fetchone()
                 parent_id = new_row['id'] if new_row else cur.lastrowid
@@ -116,7 +115,7 @@ def add_student():
         }
         copii_existenti.append(new_child)
 
-        # Salvăm lista înapoi
+        # Salvăm înapoi în baza de date
         con.execute("""
             UPDATE utilizatori 
             SET copii = %s 
@@ -137,29 +136,27 @@ def add_student():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 3. DELETE: Șterge un elev (din JSON) ---
+# --- 3. DELETE: Șterge un elev ---
 @elevi_bp.delete("/api/elevi/<string:elev_id>")
 def delete_student(elev_id):
     con = get_conn()
     try:
-        # Căutăm toți utilizatorii cu copii
+        # Căutăm toți userii cu copii (fallback sigur pentru orice versiune Postgres/driver)
         rows = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
 
         parent_found = None
         new_copii_list = []
 
-        # Căutăm manual în Python unde se află copilul cu ID-ul respectiv
         for r in rows:
             r_dict = dict(r)
             copii = _safe_load_list(r_dict["copii"])
 
-            # Verificăm dacă ID-ul există în lista asta
-            lista_filtrata = [c for c in copii if c.get("id") != elev_id]
+            original_len = len(copii)
+            filtered = [c for c in copii if c.get("id") != elev_id]
 
-            if len(lista_filtrata) < len(copii):
-                # Am găsit și șters copilul
+            if len(filtered) < original_len:
                 parent_found = r_dict["id"]
-                new_copii_list = lista_filtrata
+                new_copii_list = filtered
                 break
 
         if parent_found:
@@ -176,7 +173,7 @@ def delete_student(elev_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 4. SUGESTII (pentru dropdown) ---
+# --- 4. SUGESTII (pentru dropdown înscriere) ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 def sugestii_inscriere():
     username = request.args.get('username')
@@ -199,6 +196,7 @@ def sugestii_inscriere():
                 lst = _safe_load_list(raw)
                 for c in lst:
                     if c.get("nume"):
+                        # Trimitem și grupa, util pentru dropdown
                         copii.append({"nume": c.get("nume"), "grupa": c.get("grupa", "")})
 
         return jsonify({"status": "success", "data": {"rol": rol, "nume_propriu": nume, "copii": copii}})
