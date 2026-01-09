@@ -64,7 +64,7 @@ def add_student():
     gen = data.get("gen")
     grupa = data.get("grupa")
 
-    # Frontend-ul trimite 'parinte_nume'
+    # Frontend trimite cheia 'parinte_nume'
     nume_parinte = _normalize(data.get("parinte_nume"))
 
     if not nume_elev:
@@ -87,18 +87,20 @@ def add_student():
             parent_id = row_dict["id"]
             copii_existenti = _safe_load_list(row_dict.get("copii"))
         else:
-            # --- CREARE PĂRINTE FICTIV ---
-            # Trebuie să creăm un rând în DB pentru a avea unde să stocăm JSON-ul 'copii'.
-            # Punem o parolă dummy ('NO_LOGIN') pentru a trece de constrângerea NOT NULL a bazei de date.
-
+            # --- CREARE PĂRINTE FICTIV (PLACEHOLDER) ---
             claim_code = uuid.uuid4().hex[:8].upper()
 
-            # Inserăm parola explicit pentru a nu primi eroare
+            # Generăm un email DUMMY pentru a trece de restricția NOT NULL a bazei de date.
+            # Acesta va fi unic pentru a nu da conflict.
+            dummy_email = f"no_email_{claim_code}@placeholder.local"
+
+            # Inserăm cu parolă dummy și email dummy
             cur = con.execute("""
                 INSERT INTO utilizatori (
                     rol, 
                     username, 
                     nume_complet, 
+                    email,              -- Adăugat câmpul email
                     is_placeholder, 
                     claim_code, 
                     created_by_trainer, 
@@ -109,6 +111,7 @@ def add_student():
                     'parinte', 
                     %s, 
                     %s, 
+                    %s,                 -- Valoarea pentru email
                     1, 
                     %s, 
                     1, 
@@ -116,9 +119,8 @@ def add_student():
                     'NO_LOGIN_ACCOUNT' 
                 )
                 RETURNING id
-            """, (nume_parinte, nume_parinte, claim_code))
+            """, (nume_parinte, nume_parinte, dummy_email, claim_code))
 
-            # Recuperăm ID-ul noului rând
             try:
                 new_row = cur.fetchone()
                 parent_id = new_row['id'] if new_row else cur.lastrowid
@@ -137,7 +139,7 @@ def add_student():
         }
         copii_existenti.append(new_child)
 
-        # Salvăm lista actualizată în baza de date
+        # Salvăm lista actualizată
         con.execute("""
             UPDATE utilizatori 
             SET copii = %s 
@@ -163,7 +165,6 @@ def add_student():
 def delete_student(elev_id):
     con = get_conn()
     try:
-        # Căutăm părintele care are acest copil
         rows = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
 
         parent_found = None
@@ -173,7 +174,6 @@ def delete_student(elev_id):
             r_dict = dict(r)
             copii = _safe_load_list(r_dict.get("copii"))
 
-            # Verificăm dacă ID-ul copilului există în această listă
             filtered = [c for c in copii if c.get("id") != elev_id]
 
             if len(filtered) < len(copii):
@@ -195,7 +195,7 @@ def delete_student(elev_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 4. SUGESTII (pentru dropdown) ---
+# --- 4. SUGESTII ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 def sugestii_inscriere():
     username = request.args.get('username')
