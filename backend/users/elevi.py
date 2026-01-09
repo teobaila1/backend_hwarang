@@ -1,6 +1,7 @@
 # backend/users/elevi.py
 import json
 import re
+import uuid
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 
@@ -8,181 +9,198 @@ elevi_bp = Blueprint("elevi", __name__)
 
 
 def _normalize(s):
-    s = (s or "").strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
+    return re.sub(r"\s+", " ", (s or "").strip())
 
 
-def _get_columns(con, table_name: str):
-    """
-    Returnează lista coloanelor unui tabel.
-    Funcționează pe PostgreSQL și SQLite.
-    """
-    # PostgreSQL
+def _safe_load_list(s):
+    if not s: return []
     try:
-        rows = con.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = %s
-        """, (table_name,)).fetchall()
-
-        if rows:
-            return {r[0] for r in rows}
+        if isinstance(s, list): return s
+        v = json.loads(s)
+        return v if isinstance(v, list) else []
     except:
-        pass
-
-    # SQLite fallback
-    try:
-        info = con.execute(f"PRAGMA table_info({table_name})").fetchall()
-        return {row[1] for row in info}
-    except:
-        return set()
+        return []
 
 
-@elevi_bp.post("/api/elevi")
-def add_student():
-    data = request.get_json(silent=True) or {}
-
-    nume = _normalize(data.get("nume"))
-    prenume = _normalize(data.get("prenume"))
-    grupa = (data.get("grupa") or "").strip()
-    varsta = (data.get("varsta") or "").strip()
-    parinte_id = data.get("parinte_id")
-
-    if not nume or not prenume or not parinte_id:
-        return jsonify({
-            "status": "error",
-            "message": "Nume, prenume și parinte_id sunt obligatorii."
-        }), 400
-
-    con = get_conn()
-    try:
-        cols = _get_columns(con, "copii")
-
-        fields = ["nume", "prenume", "parinte_id"]
-        values = [nume, prenume, parinte_id]
-
-        # coloane opționale dacă există
-        if "grupa" in cols:
-            fields.append("grupa")
-            values.append(grupa)
-
-        if "varsta" in cols:
-            fields.append("varsta")
-            values.append(varsta)
-
-        placeholders = ", ".join(["%s"] * len(fields))
-        sql = f"INSERT INTO copii ({', '.join(fields)}) VALUES ({placeholders})"
-
-        cur = con.execute(sql, tuple(values))
-        new_id = cur.lastrowid if hasattr(cur, "lastrowid") else None
-
-        con.commit()
-
-        return jsonify({
-            "status": "success",
-            "id": new_id,
-            "message": "Elev adăugat."
-        }), 201
-
-    except Exception as e:
-        con.rollback()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-
+# --- 1. GET: Returnează toți elevii (din JSON-urile părinților) ---
 @elevi_bp.get("/api/elevi")
 def get_students():
     con = get_conn()
     try:
+        # Căutăm doar utilizatorii care au ceva în coloana copii
         rows = con.execute("""
-            SELECT id, nume, prenume, grupa, varsta, parinte_id
-            FROM copii
-            ORDER BY id DESC
+            SELECT id, nume_complet, username, copii 
+            FROM utilizatori 
+            WHERE copii IS NOT NULL
         """).fetchall()
 
-        return jsonify([dict(r) for r in rows])
+        toti_elevii = []
+        for r in rows:
+            # Convertim rândul în dict pentru siguranță
+            row_dict = dict(r)
+            parinte_nume = row_dict.get("nume_complet") or row_dict.get("username")
+            parinte_id = row_dict.get("id")
+
+            copii_raw = row_dict.get("copii")
+            copii_list = _safe_load_list(copii_raw)
+
+            for copil in copii_list:
+                if isinstance(copil, dict):
+                    # Adăugăm info despre părinte pentru afișare în tabel
+                    copil["parinte_id"] = parinte_id
+                    copil["parinte_nume"] = parinte_nume
+                    toti_elevii.append(copil)
+
+        return jsonify(toti_elevii)
     except Exception as e:
+        print(f"Eroare GET elevi: {e}")
+        return jsonify([])
+
+
+# --- 2. POST: Adaugă un elev (Actualizează JSON-ul părintelui) ---
+@elevi_bp.post("/api/elevi")
+def add_student():
+    data = request.get_json(silent=True) or {}
+    print(f"DEBUG: Date primite la POST /api/elevi: {data}")
+
+    nume_elev = _normalize(data.get("nume"))
+    varsta = data.get("varsta")
+    gen = data.get("gen")
+    grupa = data.get("grupa")
+    nume_parinte = _normalize(data.get("nume_parinte"))
+
+    if not nume_elev:
+        return jsonify({"status": "error", "message": "Numele elevului este obligatoriu."}), 400
+
+    if not nume_parinte:
+        return jsonify({"status": "error", "message": "Trebuie să introduci numele părintelui."}), 400
+
+    con = get_conn()
+    try:
+        # Căutăm părintele existent
+        row = con.execute("""
+            SELECT id, copii FROM utilizatori 
+            WHERE LOWER(username) = LOWER(%s) OR LOWER(nume_complet) = LOWER(%s)
+            LIMIT 1
+        """, (nume_parinte, nume_parinte)).fetchone()
+
+        if row:
+            row_dict = dict(row)
+            parent_id = row_dict["id"]
+            copii_existenti = _safe_load_list(row_dict["copii"])
+        else:
+            # Creăm un părinte nou (placeholder)
+            claim_code = uuid.uuid4().hex[:8].upper()
+            cur = con.execute("""
+                INSERT INTO utilizatori (rol, username, nume_complet, is_placeholder, claim_code, created_by_trainer, copii)
+                VALUES ('parinte', %s, %s, 1, %s, 1, '[]')
+                RETURNING id
+            """, (nume_parinte, nume_parinte, claim_code))
+
+            # Gestionăm returnarea ID-ului (diferă uneori între drivere)
+            try:
+                new_row = cur.fetchone()
+                parent_id = new_row['id'] if new_row else cur.lastrowid
+            except:
+                parent_id = cur.lastrowid
+
+            copii_existenti = []
+
+        # Creăm obiectul copil
+        new_child = {
+            "id": uuid.uuid4().hex,
+            "nume": nume_elev,
+            "varsta": varsta,
+            "gen": gen,
+            "grupa": grupa
+        }
+        copii_existenti.append(new_child)
+
+        # Salvăm lista înapoi
+        con.execute("""
+            UPDATE utilizatori 
+            SET copii = %s 
+            WHERE id = %s
+        """, (json.dumps(copii_existenti, ensure_ascii=False), parent_id))
+
+        con.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Elev adăugat la părintele {nume_parinte}.",
+            "elev": new_child
+        }), 201
+
+    except Exception as e:
+        con.rollback()
+        print(f"Eroare add_student: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@elevi_bp.delete("/api/elevi/<int:elev_id>")
+# --- 3. DELETE: Șterge un elev (din JSON) ---
+@elevi_bp.delete("/api/elevi/<string:elev_id>")
 def delete_student(elev_id):
     con = get_conn()
     try:
-        con.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
-        con.commit()
-        return jsonify({"status": "success", "message": "Elev șters."})
+        # Căutăm toți utilizatorii cu copii
+        rows = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
+
+        parent_found = None
+        new_copii_list = []
+
+        # Căutăm manual în Python unde se află copilul cu ID-ul respectiv
+        for r in rows:
+            r_dict = dict(r)
+            copii = _safe_load_list(r_dict["copii"])
+
+            # Verificăm dacă ID-ul există în lista asta
+            lista_filtrata = [c for c in copii if c.get("id") != elev_id]
+
+            if len(lista_filtrata) < len(copii):
+                # Am găsit și șters copilul
+                parent_found = r_dict["id"]
+                new_copii_list = lista_filtrata
+                break
+
+        if parent_found:
+            con.execute("""
+                UPDATE utilizatori SET copii = %s WHERE id = %s
+            """, (json.dumps(new_copii_list, ensure_ascii=False), parent_found))
+            con.commit()
+            return jsonify({"status": "success", "message": "Elev șters."})
+        else:
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- Adaugă sau înlocuiește la finalul fișierului elevi.py ---
-
+# --- 4. SUGESTII (pentru dropdown) ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 def sugestii_inscriere():
     username = request.args.get('username')
-
-    if not username:
-        return jsonify({"status": "error", "message": "Username lipsă"}), 400
+    if not username: return jsonify({"status": "error", "message": "Username lipsă"}), 400
 
     try:
         con = get_conn()
+        row = con.execute("SELECT rol, nume_complet, copii FROM utilizatori WHERE username=%s", (username,)).fetchone()
 
-        # 1. Căutăm utilizatorul și coloana 'copii' direct din tabela 'utilizatori'
-        row_user = con.execute(
-            "SELECT id, rol, nume_complet, copii FROM utilizatori WHERE username = %s",
-            (username,)
-        ).fetchone()
+        if not row: return jsonify({"status": "error", "message": "User not found"}), 404
 
-        if not row_user:
-            return jsonify({"status": "error", "message": "Utilizator negăsit"}), 404
+        u = dict(row)
+        rol = (u.get("rol") or "").lower()
+        nume = u.get("nume_complet") or username
+        copii = []
 
-        user = dict(row_user)
-        rol = (user.get('rol') or "").lower()
-        nume_propriu = user.get('nume_complet') or username
-        lista_copii = []
-
-        # 2. Dacă e Părinte sau Admin, procesăm JSON-ul din coloana 'copii'
         if rol in ['parinte', 'admin']:
-            copii_raw = user.get('copii')
+            raw = u.get("copii")
+            if raw:
+                lst = _safe_load_list(raw)
+                for c in lst:
+                    if c.get("nume"):
+                        copii.append({"nume": c.get("nume"), "grupa": c.get("grupa", "")})
 
-            if copii_raw:
-                try:
-                    # Dacă e string (text în DB), îl transformăm în listă
-                    if isinstance(copii_raw, str):
-                        date_copii = json.loads(copii_raw)
-                    else:
-                        # Uneori driverul face conversia automat
-                        date_copii = copii_raw
-
-                    # Extragem doar ce ne trebuie (Nume și Grupă)
-                    if isinstance(date_copii, list):
-                        for c in date_copii:
-                            # Din JSON-ul tău: {"id": "...", "nume": "PATRIK...", "grupa": "..."}
-                            nume = c.get('nume', '').strip()
-                            grupa = c.get('grupa', '')
-                            if nume:
-                                lista_copii.append({
-                                    "nume": nume,
-                                    "grupa": grupa
-                                })
-                except Exception as e_json:
-                    print(f"Eroare parsing JSON copii: {e_json}")
-                    # Nu crăpăm tot requestul, doar returnăm lista goală dacă JSON-ul e corupt
-
-        return jsonify({
-            "status": "success",
-            "data": {
-                "rol": rol,
-                "nume_propriu": nume_propriu,
-                "copii": lista_copii
-            }
-        })
-
+        return jsonify({"status": "success", "data": {"rol": rol, "nume_propriu": nume, "copii": copii}})
     except Exception as e:
-        print(f"Eroare server sugestii: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
