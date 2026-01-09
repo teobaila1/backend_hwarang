@@ -1,5 +1,7 @@
 # backend/users/parinti.py
-import uuid, re
+import uuid
+import re
+import json
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 
@@ -8,7 +10,7 @@ parinti_bp = Blueprint("parinti", __name__)
 
 def _normalize_name(s):
     s = (s or "").strip()
-    # spații multiple -> spațiu simplu; primele litere mari
+    # spații multiple -> spațiu simplu
     s = re.sub(r"\s+", " ", s)
     return s
 
@@ -18,36 +20,7 @@ def _new_claim_code():
     return uuid.uuid4().hex[:8].upper()
 
 
-def _get_columns(con, table_name: str):
-    """
-    Returnează setul de coloane pentru un tabel, funcționând atât pe PostgreSQL,
-    cât și pe SQLite.
-    """
-    cols = set()
-
-    # Încercăm întâi varianta PostgreSQL (information_schema)
-    try:
-        rows = con.execute("""
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name = %s
-        """, (table_name,)).fetchall()
-        if rows:
-            return {r[0] for r in rows}
-    except Exception:
-        pass
-
-    # Fallback: SQLite PRAGMA, dacă suntem pe SQLite
-    try:
-        info = con.execute(f"PRAGMA table_info({table_name})").fetchall()
-        # format: (cid, name, type, notnull, dflt_value, pk)
-        cols = {r[1] for r in info}
-    except Exception:
-        cols = set()
-
-    return cols
-
-
+# Endpoint folosit dacă vrei să creezi doar un părinte gol, fără copii (opțional)
 @parinti_bp.post("/api/parinti/placeholder")
 def create_parent_placeholder():
     data = request.get_json(silent=True) or {}
@@ -59,21 +32,41 @@ def create_parent_placeholder():
     try:
         claim_code = _new_claim_code()
 
-        # INSERT dinamic, compatibil cu schema curentă
-        cols = ["rol", "username", "email", "is_placeholder", "claim_code", "created_by_trainer", "copii", "grupe"]
-        vals = ["parinte", nume, None, 1, claim_code, 1, "[]", ""]
+        # Generăm același tip de email dummy ca în elevi.py
+        dummy_email = f"-_{claim_code}"
 
-        # dacă ai coloana nume_complet, o setăm
-        cur_cols = _get_columns(con, "utilizatori")
-        if "nume_complet" in cur_cols:
-            cols.append("nume_complet")
-            vals.append(nume)
+        cur = con.execute("""
+            INSERT INTO utilizatori (
+                rol, 
+                username, 
+                nume_complet, 
+                email, 
+                is_placeholder, 
+                claim_code, 
+                created_by_trainer, 
+                copii, 
+                parola
+            )
+            VALUES (
+                'parinte', 
+                %s, 
+                %s, 
+                %s,  -- dummy email
+                1, 
+                %s, 
+                1, 
+                '[]', 
+                'NO_LOGIN_ACCOUNT' -- dummy password
+            )
+            RETURNING id
+        """, (nume, nume, dummy_email, claim_code))
 
-        placeholders = ", ".join(["?"] * len(cols))  # `?` va fi convertit în `%s` de wrapper-ul din config.py
-        sql = f"INSERT INTO utilizatori ({', '.join(cols)}) VALUES ({placeholders})"
-        cur = con.execute(sql, tuple(vals))
+        try:
+            new_row = cur.fetchone()
+            parent_id = new_row['id'] if new_row else cur.lastrowid
+        except:
+            parent_id = cur.lastrowid
 
-        parent_id = cur.lastrowid
         con.commit()
         return jsonify({"status": "success", "id": parent_id, "claim_code": claim_code}), 201
 
@@ -82,13 +75,21 @@ def create_parent_placeholder():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# --- LOGICA PRINCIPALĂ DE ACTIVARE CONT ---
 @parinti_bp.patch("/api/parinti/claim")
 def claim_parent_account():
     data = request.get_json(silent=True) or {}
+
+    # 1. Identificăm contul
     nume = _normalize_name(data.get("nume"))
+    claim_code = (data.get("claim_code") or "").strip().upper() or None
+
+    # 2. Datele reale ale părintelui
     email = (data.get("email") or "").strip() or None
     parola_hash = data.get("parola_hash")
-    claim_code = (data.get("claim_code") or "").strip().upper() or None
+
+    # 3. Lista de copii (dacă părintele a completat-o în formular)
+    copii_noi = data.get("copii")
 
     if not nume:
         return jsonify({"status": "error", "message": "Numele este obligatoriu."}), 400
@@ -96,6 +97,7 @@ def claim_parent_account():
     con = get_conn()
     try:
         row = None
+        # Căutăm contul placeholder
         if claim_code:
             row = con.execute(
                 "SELECT * FROM utilizatori WHERE claim_code = %s AND is_placeholder = 1",
@@ -104,42 +106,69 @@ def claim_parent_account():
             if not row:
                 return jsonify({"status": "error", "message": "Cod invalid sau deja revendicat."}), 404
         else:
-            # match pe username (nu pe o coloană 'nume' inexistentă)
             rows = con.execute(
                 "SELECT * FROM utilizatori WHERE is_placeholder = 1 AND LOWER(username) = LOWER(%s)",
                 (nume,)
             ).fetchall()
             if not rows:
-                return jsonify({"status": "error", "message": "Nu există placeholder pe acest nume."}), 404
+                return jsonify({"status": "error", "message": "Nu există cont de revendicat pe acest nume."}), 404
             if len(rows) > 1:
-                return jsonify({"status": "error", "message": "Există mai mulți părinți cu acest nume. Cere un claim_code de la antrenor."}), 409
+                return jsonify({"status": "error",
+                                "message": "Sunt mai mulți părinți cu acest nume. Cere codul de la antrenor."}), 409
             row = rows[0]
 
         parent_id = row["id"]
 
+        # Construim lista de actualizări SQL
         fields, values = [], []
-        if email is not None:
+
+        if email:
             fields.append("email = %s")
             values.append(email)
         if parola_hash:
             fields.append("parola = %s")
             values.append(parola_hash)
-        # alte câmpuri opționale
+
+        # --- SUPRASCRIERE COPII ---
+        # Dacă frontend-ul trimite o listă de copii (chiar și goală), suprascriem ce era înainte.
+        if copii_noi is not None and isinstance(copii_noi, list):
+            lista_procesata = []
+            for copil in copii_noi:
+                if isinstance(copil, dict):
+                    c_nou = {
+                        "id": copil.get("id") or uuid.uuid4().hex,
+                        "nume": copil.get("nume", "").strip(),
+                        "varsta": copil.get("varsta"),
+                        "gen": copil.get("gen"),
+                        "grupa": copil.get("grupa", "")
+                    }
+                    lista_procesata.append(c_nou)
+
+            fields.append("copii = %s")
+            values.append(json.dumps(lista_procesata, ensure_ascii=False))
+        # --------------------------
+
         for k in ("telefon", "adresa"):
             if k in data:
                 fields.append(f"{k} = %s")
                 values.append((data.get(k) or "").strip() or None)
 
+        # Transformăm contul în unul real
         fields.append("is_placeholder = 0")
         fields.append("claim_code = NULL")
 
         if not fields:
-            return jsonify({"status": "error", "message": "Nu ai trimis date noi de completat."}), 400
+            return jsonify({"status": "error", "message": "Nu ai trimis date noi."}), 400
 
         values.append(parent_id)
         con.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s", values)
         con.commit()
-        return jsonify({"status": "success", "id": parent_id}), 200
+
+        return jsonify({
+            "status": "success",
+            "id": parent_id,
+            "message": "Cont activat cu succes!"
+        }), 200
 
     except Exception as e:
         con.rollback()

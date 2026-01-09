@@ -90,17 +90,16 @@ def add_student():
             # --- CREARE PĂRINTE FICTIV (PLACEHOLDER) ---
             claim_code = uuid.uuid4().hex[:8].upper()
 
-            # Generăm un email DUMMY pentru a trece de restricția NOT NULL a bazei de date.
-            # Acesta va fi unic pentru a nu da conflict.
-            dummy_email = f"no_email_{claim_code}@placeholder.local"
+            # Generăm un email scurt și unic care începe cu cratimă.
+            # Ex: "-_A1B2C3D4". E unic (nu dă eroare) și arată minimalist.
+            dummy_email = f"-_{claim_code}"
 
-            # Inserăm cu parolă dummy și email dummy
             cur = con.execute("""
                 INSERT INTO utilizatori (
                     rol, 
                     username, 
                     nume_complet, 
-                    email,              -- Adăugat câmpul email
+                    email, 
                     is_placeholder, 
                     claim_code, 
                     created_by_trainer, 
@@ -111,7 +110,7 @@ def add_student():
                     'parinte', 
                     %s, 
                     %s, 
-                    %s,                 -- Valoarea pentru email
+                    %s,  -- dummy_email
                     1, 
                     %s, 
                     1, 
