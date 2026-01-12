@@ -1,7 +1,7 @@
 # backend/competitions/stergere_concurs.py
 from flask import Blueprint, jsonify
 
-from ..accounts.decorators import token_required
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn
 import urllib.parse
 

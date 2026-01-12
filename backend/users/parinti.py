@@ -3,6 +3,8 @@ import uuid
 import re
 import json
 from flask import Blueprint, request, jsonify
+
+from backend.accounts.decorators import token_required
 from backend.config import get_conn
 
 parinti_bp = Blueprint("parinti", __name__)

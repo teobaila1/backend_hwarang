@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 
-from ..accounts.decorators import token_required
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn  # o singură sursă pentru DB
 
 adauga_concurs_bp = Blueprint('adauga_concurs', __name__)
