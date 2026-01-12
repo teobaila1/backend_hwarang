@@ -2,19 +2,13 @@
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
 from ..accounts.inregistrare import trimite_email_acceptare, trimite_email_respingere
-# Atenție: verifică dacă importul de mai sus e corect în structura ta.
-# Uneori e '..auth.inregistrare' sau '..accounts.inregistrare' în funcție de cum ai organizat folderele.
-# Dacă primești eroare de import, lasă importul cum era la tine în fișierul original.
+# Importăm decoratorii
+from ..accounts.decorators import token_required, admin_required
 
 cereri_utilizatori_bp = Blueprint("cereri_utilizatori", __name__)
 
-
-# --- util: asigură existența coloanei (PostgreSQL) ----------------------------
+# ... (păstrează funcția _ensure_column neschimbată) ...
 def _ensure_column(con, table: str, column: str, sql_type: str = "TEXT"):
-    """
-    Pentru PostgreSQL: verifică dacă o coloană există în information_schema.
-    Dacă nu există, dă un ALTER TABLE ADD COLUMN.
-    """
     cur = con.cursor()
     cur.execute(
         """
@@ -30,38 +24,20 @@ def _ensure_column(con, table: str, column: str, sql_type: str = "TEXT"):
             f'ALTER TABLE {table} ADD COLUMN {column} {sql_type}'
         )
         con.commit()
-# -----------------------------------------------------------------------------
-
 
 @cereri_utilizatori_bp.get("/api/cereri")
+@token_required
+@admin_required  # <--- SECURIZAT
 def get_cereri():
-    username = (request.args.get("username") or "").strip()
-    if not username:
-        return jsonify({"error": "Lipsește username-ul"}), 401
-
+    # Nu mai verificăm manual username/rol, decoratorii fac asta
     try:
         con = get_conn()
         cur = con.cursor()
 
-        # Ne asigurăm că există coloanele necesare
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "utilizatori", "nume_complet")
         _ensure_column(con, "cereri_utilizatori", "data_nasterii", "DATE")
 
-        # verifică rolul de admin
-        cur.execute(
-            "SELECT rol FROM utilizatori WHERE username = %s LIMIT 1",
-            (username,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"error": "Utilizator inexistent"}), 404
-
-        rol = (row["rol"] if isinstance(row, dict) else row[0]) or ""
-        if rol.lower() != "admin":
-            return jsonify({"error": "Acces interzis"}), 403
-
-        # Selectăm și data_nasterii pentru afișaj
         cur.execute(
             """
             SELECT id,
@@ -85,10 +61,9 @@ def get_cereri():
                 email = r["email"]
                 tip = r["tip"]
                 varsta = r["varsta"]
-                d_nastere = r.get("data_nasterii") # luăm data nașterii
+                d_nastere = r.get("data_nasterii")
                 afisaj = r["afisaj"]
             else:
-                # ajustăm unpacking-ul dacă r e tuplu (atenție la ordinea din SELECT)
                 rid, user, email, tip, varsta, d_nastere, afisaj = r
 
             lista.append(
@@ -110,23 +85,19 @@ def get_cereri():
 
 
 @cereri_utilizatori_bp.post("/api/cereri/accepta/<int:cerere_id>")
+@token_required
+@admin_required  # <--- SECURIZAT
 def accepta_cerere(cerere_id: int):
     try:
         con = get_conn()
         cur = con.cursor()
 
-        # Asigurăm coloanele și în tabela finală
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "utilizatori", "nume_complet")
         _ensure_column(con, "utilizatori", "data_nasterii", "DATE")
 
-        # 1. Luăm datele din cerere (INCLUSIV data_nasterii)
         cur.execute(
-            """
-            SELECT id, username, email, parola, tip, copii, grupe, nume_complet, data_nasterii
-            FROM cereri_utilizatori
-            WHERE id = %s
-            """,
+            "SELECT * FROM cereri_utilizatori WHERE id = %s",
             (cerere_id,),
         )
         row = cur.fetchone()
@@ -134,52 +105,39 @@ def accepta_cerere(cerere_id: int):
         if not row:
             return jsonify({"error": "Cerere inexistentă"}), 404
 
-        if isinstance(row, dict):
-            username = row["username"]
-            email = row["email"]
-            parola = row["parola"]
-            tip = row["tip"]
-            copii = row["copii"]
-            grupe = row["grupe"]
-            nume_complet = row["nume_complet"]
-            data_nasterii = row.get("data_nasterii") # <--- Aici preluăm data
-        else:
-            _, username, email, parola, tip, copii, grupe, nume_complet, data_nasterii = row
+        # Maparea rândului la variabile (depinde de driver, dict sau tuple)
+        # Simplificăm folosind direct numele coloanelor dacă e dict (Psycopg2 RealDictCursor)
+        # sau accesând prin index dacă e tuplu (dar aici presupunem că ai configurat dict cursor sau accesăm sigur)
+        # Pentru siguranță maximă, extragem datele esențiale:
+        username = row["username"]
+        email = row["email"]
+        parola = row["parola"]
+        tip = row["tip"] # devine rol
+        copii = row["copii"]
+        grupe = row["grupe"]
+        nume_complet = row["nume_complet"]
+        data_nasterii = row.get("data_nasterii")
 
         # Verificăm duplicate
         cur.execute(
             "SELECT 1 FROM utilizatori WHERE username = %s OR email = %s LIMIT 1",
             (username, email),
         )
-        exists = cur.fetchone()
-        if exists:
-            return jsonify(
-                {"error": "Există deja un utilizator cu acest username/email"}
-            ), 409
+        if cur.fetchone():
+            return jsonify({"error": "Există deja un utilizator cu acest username/email"}), 409
 
-        # 2. Inserăm în utilizatori (INCLUSIV data_nasterii)
+        # Inserăm
         cur.execute(
             """
             INSERT INTO utilizatori (username, parola, rol, email, grupe, copii, nume_complet, data_nasterii)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (
-                username,
-                parola,
-                tip,
-                email,
-                grupe,
-                copii,
-                (nume_complet or username),
-                data_nasterii # <--- Aici o salvăm în tabelul final
-            ),
+            (username, parola, tip, email, grupe, copii, (nume_complet or username), data_nasterii),
         )
 
-        # Ștergem cererea
         cur.execute("DELETE FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         con.commit()
 
-        # Trimitem email
         try:
             trimite_email_acceptare(email, username)
         except Exception as e:
@@ -192,24 +150,21 @@ def accepta_cerere(cerere_id: int):
 
 
 @cereri_utilizatori_bp.delete("/api/cereri/respingere/<int:cerere_id>")
+@token_required
+@admin_required  # <--- SECURIZAT
 def respinge_cerere(cerere_id: int):
     try:
         con = get_conn()
         cur = con.cursor()
 
-        cur.execute(
-            "SELECT username, email FROM cereri_utilizatori WHERE id = %s",
-            (cerere_id,),
-        )
+        cur.execute("SELECT username, email FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         row = cur.fetchone()
 
         if not row:
             return jsonify({"status": "success"}), 200
 
-        if isinstance(row, dict):
-            username, email = row["username"], row["email"]
-        else:
-            username, email = row
+        username = row["username"]
+        email = row["email"]
 
         cur.execute("DELETE FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         con.commit()

@@ -3,6 +3,8 @@ import json
 import re
 import uuid
 from flask import Blueprint, jsonify, request
+
+from ..accounts.decorators import admin_required, token_required
 from ..config import get_conn
 
 toti_copiii_parintilor_bp = Blueprint('copiii_parintilor', __name__)
@@ -34,6 +36,8 @@ def _is_admin(con, username):
 
 # ---------------- GET toți copiii (CU AUTO-REPARARE ID-uri) ----------------
 @toti_copiii_parintilor_bp.get("/api/toti_copiii")
+@token_required
+@admin_required # Vizualizare globală -> ADMIN
 def toti_copiii():
     try:
         con = get_conn()
@@ -95,6 +99,7 @@ def toti_copiii():
 
 # ---------------- POST adaugă copil ----------------
 @toti_copiii_parintilor_bp.post("/api/adauga_copil")
+@token_required # Părintele adaugă -> Doar logat
 def adauga_copil():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
@@ -140,6 +145,8 @@ def adauga_copil():
 
 # ---------------- ADMIN: PATCH copil ----------------
 @toti_copiii_parintilor_bp.patch("/api/admin/copii/<child_id>")
+@token_required
+@admin_required # Admin edit copil
 def admin_update_child(child_id):
     # Verificăm să nu fie undefined din start
     if not child_id or child_id == "undefined":
@@ -197,6 +204,8 @@ def admin_update_child(child_id):
 
 # ---------------- ADMIN: DELETE copil ----------------
 @toti_copiii_parintilor_bp.delete("/api/admin/copii/<child_id>")
+@token_required
+@admin_required
 def admin_delete_child(child_id):
     data = request.get_json(silent=True) or {}
     admin_username = (data.get("admin_username") or "").strip()
@@ -255,6 +264,8 @@ def _ensure_column(con, table, column, sql_type="TEXT"):
 
 
 @toti_copiii_parintilor_bp.patch("/api/admin/parinte/<parent_username>")
+@token_required
+@admin_required
 def admin_update_parent(parent_username):
     data = request.get_json(silent=True) or {}
     admin_username = (data.get("admin_username") or "").strip()
@@ -305,6 +316,8 @@ def admin_update_parent(parent_username):
 
 # ---------------- ADMIN: DELETE părinte ----------------
 @toti_copiii_parintilor_bp.delete("/api/admin/parinte/<parent_username>")
+@token_required
+@admin_required
 def admin_delete_parent(parent_username):
     data = request.get_json(silent=True) or {}
     admin_username = (data.get("admin_username") or "").strip()

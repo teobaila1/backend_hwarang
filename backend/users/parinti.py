@@ -21,7 +21,9 @@ def _new_claim_code():
 
 
 # Endpoint folosit dacă vrei să creezi doar un părinte gol, fără copii (opțional)
+# --- SECURIZAT: Doar un utilizator logat (Antrenor) poate genera placeholder ---
 @parinti_bp.post("/api/parinti/placeholder")
+@token_required
 def create_parent_placeholder():
     data = request.get_json(silent=True) or {}
     nume = _normalize_name(data.get("nume"))

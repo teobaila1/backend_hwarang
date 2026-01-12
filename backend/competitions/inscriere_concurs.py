@@ -1,9 +1,12 @@
 from flask import Blueprint, request, jsonify
+
+from ..accounts.decorators import token_required
 from ..config import get_conn  # o singură sursă pentru DB
 
 inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 
 @inscriere_concurs_bp.post('/api/inscriere_concurs')
+@token_required # Trebuie să fie logat ca să se înscrie
 def inscriere_concurs():
     data = request.get_json(silent=True) or {}
 

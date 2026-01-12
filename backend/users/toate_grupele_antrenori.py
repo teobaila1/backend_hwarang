@@ -2,6 +2,8 @@
 import json
 import re
 from flask import Blueprint, jsonify
+
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn
 
 toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
@@ -25,6 +27,8 @@ def _group_sort_key(name: str):
     return int(m.group(1)) if m else 9999
 
 @toate_grupele_antrenori_bp.get("/api/toate_grupele_antrenori")
+@token_required
+@admin_required
 def toate_grupele_antrenori():
     con = get_conn()
 

@@ -1,9 +1,13 @@
 from flask import Blueprint, request, jsonify
+
+from ..accounts.decorators import token_required
 from ..config import get_conn  # o singură sursă pentru DB
 
 adauga_concurs_bp = Blueprint('adauga_concurs', __name__)
 
 @adauga_concurs_bp.post('/api/adauga_concurs')
+@token_required
+@admin_required
 def adauga_concurs():
     data = request.get_json(silent=True) or {}
     nume = (data.get('nume') or '').strip()

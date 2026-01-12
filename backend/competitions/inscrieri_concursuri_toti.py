@@ -1,9 +1,13 @@
 from flask import jsonify, Blueprint, request
+
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn  # ← o singură sursă pentru DB
 
 inscriere_concurs_toti_bp = Blueprint('inscriere_concurs_toti', __name__)
 
 @inscriere_concurs_toti_bp.get("/api/inscrisi_concursuri")
+@token_required
+@admin_required # <-- Doar Admin
 def inscrisi_concursuri():
     try:
         con = get_conn()
@@ -35,6 +39,8 @@ def inscrisi_concursuri():
 
 
 @inscriere_concurs_toti_bp.route("/api/update_inscriere/<int:id>", methods=["POST"])
+@token_required
+@admin_required # <-- Doar Admin
 def update_inscriere(id):
     data = request.get_json(silent=True) or {}
     # Lista de câmpuri necesare (inaltime e opțională, deci nu o punem la required strict, dar o folosim la update)
@@ -70,6 +76,8 @@ def update_inscriere(id):
 
 
 @inscriere_concurs_toti_bp.delete("/api/delete_inscriere/<int:id>")
+@token_required
+@admin_required # <-- Doar Admin
 def delete_inscriere(id):
     try:
         con = get_conn()

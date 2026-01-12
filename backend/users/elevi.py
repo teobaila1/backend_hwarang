@@ -3,6 +3,8 @@ import json
 import re
 import uuid
 from flask import Blueprint, request, jsonify
+
+from backend.accounts.decorators import token_required
 from backend.config import get_conn
 
 elevi_bp = Blueprint("elevi", __name__)
@@ -24,6 +26,7 @@ def _safe_load_list(s):
 
 # --- 1. GET: Returnează toți elevii ---
 @elevi_bp.get("/api/elevi")
+@token_required # <-- Acces doar logat (Antrenori/Admini)
 def get_students():
     con = get_conn()
     try:
@@ -55,6 +58,7 @@ def get_students():
 
 # --- 2. POST: Adaugă un elev ---
 @elevi_bp.post("/api/elevi")
+@token_required # <-- Doar logat
 def add_student():
     data = request.get_json(silent=True) or {}
     print(f"DEBUG: Date primite la POST /api/elevi: {data}")
@@ -161,6 +165,7 @@ def add_student():
 
 # --- 3. DELETE: Șterge un elev ---
 @elevi_bp.delete("/api/elevi/<string:elev_id>")
+@token_required # <-- Doar logat (ideal ar fi și verificare dacă e elevul tău)
 def delete_student(elev_id):
     con = get_conn()
     try:

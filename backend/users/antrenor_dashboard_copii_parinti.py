@@ -3,6 +3,8 @@ import re
 import uuid
 import json
 from flask import request, jsonify, Blueprint
+
+from ..accounts.decorators import token_required
 from ..config import get_conn  # ✅ sursă unică pentru DB
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
@@ -48,6 +50,7 @@ def ensure_child_ids_and_normalize(children):
 
 
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
+@token_required # Doar antrenorii
 def antrenor_dashboard_data():
     """
     Răspuns: listă de rânduri de forma:
@@ -147,6 +150,7 @@ def antrenor_dashboard_data():
 
 
 @antrenor_dashboard_copii_parinti_bp.route("/api/copiii_mei", methods=["POST"])
+@token_required # Doar părinții/antrenorii
 def copiii_mei():
     data = request.get_json(silent=True) or {}
     username = data.get("username")

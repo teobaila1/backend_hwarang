@@ -1,11 +1,15 @@
 # backend/competitions/stergere_concurs.py
 from flask import Blueprint, jsonify
+
+from ..accounts.decorators import token_required
 from ..config import get_conn
 import urllib.parse
 
 stergere_concurs_bp = Blueprint('stergere_concurs', __name__)
 
 @stergere_concurs_bp.delete('/api/sterge_concurs/<nume>')
+@token_required
+@admin_required
 def delete_concurs(nume: str):
     decoded_name = (urllib.parse.unquote(nume) or "").strip()
     if not decoded_name:

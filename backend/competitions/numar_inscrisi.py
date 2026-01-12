@@ -1,9 +1,12 @@
 from flask import Blueprint, jsonify
+
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn
 
 numar_inscrisi_bp = Blueprint('numar_inscrisi', __name__)
 
 @numar_inscrisi_bp.get('/api/numar_inscrisi/<nume_concurs>')
+@token_required # <-- Doar cei logați pot descărca
 def numar_inscrisi(nume_concurs: str):
     try:
         con = get_conn()
@@ -18,6 +21,8 @@ def numar_inscrisi(nume_concurs: str):
 
 
 @numar_inscrisi_bp.get('/api/inscrisi_concurs/<nume_concurs>')
+@token_required
+@admin_required # <--- LISTA CU NUME ESTE STRICT ADMIN
 def inscrisi_concurs(nume_concurs: str):
     try:
         con = get_conn()

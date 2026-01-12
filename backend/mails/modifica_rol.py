@@ -1,9 +1,13 @@
 from flask import Blueprint, request, jsonify
+
+from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn  # o singură sursă pentru DB
 
 modifica_rol_bp = Blueprint("modifica_rol", __name__)
 
 @modifica_rol_bp.post("/api/modifica-rol")
+@token_required
+@admin_required
 def modifica_rol():
     data = request.get_json(silent=True) or {}
     admin_username  = (data.get("admin_username")  or "").strip()

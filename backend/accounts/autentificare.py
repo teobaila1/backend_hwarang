@@ -1,6 +1,13 @@
+import jwt
+import datetime
+import os
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
 from ..passwords.security import hash_password, check_password  # wrappers peste werkzeug
+
+# ATENȚIE: Această cheie trebuie să fie aceeași cu cea din 'decorators.py'
+# În producție, folosește un fișier .env pentru a o ascunde.
+SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 
 autentificare_bp = Blueprint("autentificare", __name__)
 
@@ -73,9 +80,22 @@ def login():
                     )
                     con.commit()
 
-        # răspuns de succes
+                # ── GENERARE TOKEN JWT (NOU) ─────────────────────────────────────────
+                # Creăm un "pașaport" digital care expiră în 24 de ore
+                token_payload = {
+                    "id": user["id"],
+                    "username": user["username"],
+                    "rol": (user["rol"] or "").lower(),
+                    "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+                }
+
+                token = jwt.encode(token_payload, SECRET_KEY, algorithm="HS256")
+                # ─────────────────────────────────────────────────────────────────────
+
+        # Răspuns de succes care include TOKEN-ul
         return jsonify({
             "status": "success",
+            "token": token,  # <--- Token-ul generat
             "user": user["username"],
             "email": user["email"],
             "rol": user["rol"],
@@ -84,6 +104,7 @@ def login():
 
     except Exception as e:
         # pentru debug poți loga `e` în server
+        print(f"Eroare login: {e}")
         return jsonify({
             "status": "error",
             "message": "Eroare internă la autentificare."

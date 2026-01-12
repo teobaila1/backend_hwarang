@@ -6,7 +6,10 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 
+from ..accounts.decorators import admin_required
 from ..config import get_conn
+
+from ..accounts.decorators import token_required, admin_required # <-- IMPORT
 
 upload_document_bp = Blueprint("upload_document", __name__)
 
@@ -53,6 +56,7 @@ def _get_filename_by_id(doc_id: int):
 
 # --------------- Endpoints -----------------
 @upload_document_bp.post("/api/upload_document")
+@admin_required  # <-- Doar userii logați pot încărca
 def upload_documents():
     """
     Primește FormData:
@@ -113,6 +117,7 @@ def upload_documents():
 
 
 @upload_document_bp.get("/api/uploads/id/<int:doc_id>")
+@token_required # <-- Doar cei logați pot descărca
 def download_file_by_id(doc_id):
     filename = _get_filename_by_id(doc_id)
     if not filename:
@@ -121,6 +126,7 @@ def download_file_by_id(doc_id):
 
 
 @upload_document_bp.get("/api/get_documents")
+@token_required # <-- Doar cei logați văd lista
 def get_documents():
     """
     Returnează lista documentelor, ordonate descrescător după data upload-ului.
@@ -167,6 +173,8 @@ def get_documents():
 
 
 @upload_document_bp.delete("/api/delete_document/id/<int:doc_id>")
+@token_required
+@admin_required # <-- Doar ADMINII pot șterge
 def delete_document_by_id(doc_id):
     filename = _get_filename_by_id(doc_id)
     if not filename:
