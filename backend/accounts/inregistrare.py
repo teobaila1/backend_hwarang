@@ -1,6 +1,8 @@
 # backend/auth/inregistrare.py  (sau unde îl ai tu în proiect)
 import os
 import json
+from datetime import datetime
+
 from flask import Blueprint, request, jsonify
 
 from ..config import get_conn
