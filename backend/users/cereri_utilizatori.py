@@ -1,7 +1,7 @@
 # backend/users/cereri_utilizatori.py
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
-from ..auth.inregistrare import trimite_email_acceptare, trimite_email_respingere
+from ..accounts.inregistrare import trimite_email_acceptare, trimite_email_respingere
 # Atenție: verifică dacă importul de mai sus e corect în structura ta.
 # Uneori e '..auth.inregistrare' sau '..accounts.inregistrare' în funcție de cum ai organizat folderele.
 # Dacă primești eroare de import, lasă importul cum era la tine în fișierul original.
