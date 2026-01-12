@@ -1,8 +1,7 @@
-# backend/auth/inregistrare.py  (sau unde îl ai tu în proiect)
+# backend/auth/inregistrare.py
 import os
 import json
 from datetime import datetime
-
 from flask import Blueprint, request, jsonify
 
 from ..config import get_conn
@@ -80,8 +79,10 @@ def register():
     parola = data.get("password") or data.get("parola")
     tip = (data.get("tip") or "").strip()
 
-    # Câmp nou: Data Nașterii
+    # Luăm data_nasterii. Dacă este string gol "" sau lipsă, îl forțăm să fie None.
     data_nasterii = data.get("data_nasterii")
+    if not data_nasterii:
+        data_nasterii = None
 
     grupe_input = data.get("grupe", None)
     copii = data.get("copii", [])
@@ -91,23 +92,28 @@ def register():
 
     tip_l = tip.lower()
 
-    # Calculăm vârsta numerică (pentru compatibilitate DB) pe baza anului
+    # Calculăm vârsta numerică pe baza anului (pentru compatibilitate)
     varsta_calc = None
     if data_nasterii:
         try:
-            birth_year = int(data_nasterii.split("-")[0])  # YYYY-MM-DD
+            # Data vine format "YYYY-MM-DD"
+            birth_year = int(str(data_nasterii).split("-")[0])
             current_year = datetime.now().year
             varsta_calc = current_year - birth_year
         except:
             varsta_calc = None
 
-    # Validări specifice
+    # --- VALIDĂRI SPECIFICE ---
     if tip_l == "sportiv":
         if not data_nasterii:
             return jsonify({"status": "error", "message": "Data nașterii este obligatorie pentru sportiv"}), 400
+
     elif tip_l == "antrenor":
         if not grupe_input:
             return jsonify({"status": "error", "message": "Grupele sunt obligatorii pentru antrenor"}), 400
+        # AICI AM ADĂUGAT VALIDAREA PENTRU ANTRENOR
+        if not data_nasterii:
+            return jsonify({"status": "error", "message": "Data nașterii este obligatorie pentru antrenor"}), 400
 
     # Procesare copii (pt părinte)
     grupe = None
@@ -142,7 +148,7 @@ def register():
         con = get_conn()
         cur = con.cursor()
 
-        # Verificări unicitate (username/email) - Rămân la fel ca înainte
+        # Verificări unicitate
         cur.execute("SELECT 1 FROM cereri_utilizatori WHERE username = %s LIMIT 1", (username,))
         if cur.fetchone(): return jsonify({"status": "error", "message": "Username deja folosit (în cereri)"}), 409
 
@@ -156,7 +162,6 @@ def register():
         if cur.fetchone(): return jsonify({"status": "error", "message": "Email deja folosit"}), 409
 
         # Inserare în cereri_utilizatori
-        # Inserăm data_nasterii în coloana nouă, și varsta calculată în coloana veche
         cur.execute(
             """
             INSERT INTO cereri_utilizatori
