@@ -3,7 +3,7 @@ import re
 import uuid
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
-from ..auth.decorators import token_required
+from ..accounts.decorators import token_required
 
 elevi_bp = Blueprint("elevi", __name__)
 
