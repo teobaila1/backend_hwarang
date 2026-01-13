@@ -1,15 +1,10 @@
-# backend/document/upload_document.py
 import os
 from pathlib import Path
 from datetime import datetime
-
 from flask import Blueprint, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
-
-from ..accounts.decorators import admin_required
 from ..config import get_conn
-
-from ..accounts.decorators import token_required, admin_required # <-- IMPORT
+from ..accounts.decorators import token_required, admin_required  # <--- IMPORTURI ESENȚIALE
 
 upload_document_bp = Blueprint("upload_document", __name__)
 
@@ -43,138 +38,136 @@ def _get_filename_by_id(doc_id: int):
     try:
         with con:
             with con.cursor() as cur:
-                cur.execute(
-                    "SELECT filename FROM documente WHERE id = %s",
-                    (doc_id,),
-                )
+                cur.execute("SELECT filename FROM documente WHERE id = %s", (doc_id,))
                 row = cur.fetchone()
-                return row["filename"] if row else None
-    finally:
-        con.close()
-# -------------------------------------------
+                # Tratare diferită în funcție de driver (dict sau tuple)
+                if row:
+                    if isinstance(row, dict):
+                        return row["filename"]
+                    return row[0]
+    except Exception:
+        pass
+    return None
 
 
-# --------------- Endpoints -----------------
+# ---------------- RUTE ----------------
+
 @upload_document_bp.post("/api/upload_document")
-@admin_required  # <-- Doar userii logați pot încărca
+@token_required  # <--- Doar utilizatorii logați pot încărca
 def upload_documents():
-    """
-    Primește FormData:
-      - files[]: fișierele
-      - username: cine încarcă
+    # Verificăm dacă există partea de fișiere
+    if "files" not in request.files:
+        return jsonify({"status": "error", "message": "Nu au fost trimise fișiere."}), 400
 
-    Returnează: { status, saved: [{id, filename}, ...] }
-    """
     files = request.files.getlist("files")
-    username = (request.form.get("username") or "").strip()
+    if not files or files[0].filename == "":
+        return jsonify({"status": "error", "message": "Niciun fișier selectat."}), 400
 
-    if not files or not username:
-        return (
-            jsonify({"status": "error", "message": "Missing files or username"}),
-            400,
-        )
+    # Preluăm username-ul din TOKEN (mai sigur) sau din form ca fallback
+    username = "Anonim"
+    if hasattr(request, 'user_data'):
+        username = request.user_data.get('username', 'Anonim')
+    else:
+        username = request.form.get("username", "Anonim")
 
+    saved_count = 0
     con = get_conn()
-    saved = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
         with con:
             with con.cursor() as cur:
-                for file in files:
-                    if not file or not file.filename:
-                        continue
-
-                    safe_name = _unique_filename(UPLOAD_DIR, file.filename)
-                    file.save(UPLOAD_DIR / safe_name)
-
-                    # Postgres: folosim %s și RETURNING id ca să luăm PK-ul generat
-                    cur.execute(
-                        """
-                        INSERT INTO documente (filename, uploaded_by, upload_date)
-                        VALUES (%s, %s, %s)
-                        RETURNING id
-                        """,
-                        (safe_name, username, now),
+                # Asigurăm tabela
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS documente (
+                        id SERIAL PRIMARY KEY,
+                        filename TEXT NOT NULL,
+                        uploaded_by TEXT,
+                        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
-                    row = cur.fetchone()
-                    doc_id = row["id"] if row else None
-                    saved.append({"id": doc_id, "filename": safe_name})
+                """)
 
-        if not saved:
-            return (
-                jsonify({"status": "error", "message": "No valid files received"}),
-                400,
-            )
+                for f in files:
+                    if f and f.filename:
+                        # 1. Generăm nume unic pe disk
+                        safe_name = _unique_filename(UPLOAD_DIR, f.filename)
+                        save_path = UPLOAD_DIR / safe_name
 
-        return jsonify({"status": "success", "saved": saved}), 201
+                        # 2. Salvăm fizic
+                        f.save(save_path)
+
+                        # 3. Salvăm în baza de date
+                        cur.execute(
+                            "INSERT INTO documente (filename, uploaded_by) VALUES (%s, %s)",
+                            (safe_name, username)
+                        )
+                        saved_count += 1
+        con.commit()
+        return jsonify({"status": "success", "message": f"{saved_count} fișiere încărcate."}), 201
 
     except Exception as e:
-        # în caz de eroare, conexiunea iese din with și face rollback
+        print(f"Eroare upload: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        con.close()
-
-
-@upload_document_bp.get("/api/uploads/id/<int:doc_id>")
-@token_required # <-- Doar cei logați pot descărca
-def download_file_by_id(doc_id):
-    filename = _get_filename_by_id(doc_id)
-    if not filename:
-        return jsonify({"status": "error", "message": "Document inexistent"}), 404
-    return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
 
 
 @upload_document_bp.get("/api/get_documents")
-@token_required # <-- Doar cei logați văd lista
+@token_required  # <--- Doar cei logați văd lista
 def get_documents():
-    """
-    Returnează lista documentelor, ordonate descrescător după data upload-ului.
-
-    upload_date în DB este text în format 'YYYY-MM-DD HH:MI:SS'.
-    În Postgres îl sortăm folosind cast la timestamp, și tratăm stringul gol
-    ca NULL ca să nu dea eroare la cast.
-    """
     con = get_conn()
     try:
         with con:
             with con.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        filename,
-                        COALESCE(uploaded_by, '') AS uploaded_by,
-                        COALESCE(upload_date, '') AS upload_date
-                    FROM documente
-                    ORDER BY
-                        NULLIF(upload_date, '')::timestamp DESC NULLS LAST,
-                        id DESC
-                    """
-                )
+                # Verificăm dacă tabela există
+                cur.execute("SELECT to_regclass('public.documente')")
+                if not cur.fetchone()[0]:
+                    return jsonify([])
+
+                cur.execute("""
+                    SELECT id, filename, uploaded_by, 
+                           TO_CHAR(upload_date, 'YYYY-MM-DD HH24:MI:SS') as upload_date 
+                    FROM documente 
+                    ORDER BY id DESC
+                """)
                 rows = cur.fetchall()
 
-        docs = [
-            {
-                "id": r["id"],
-                "filename": r["filename"],
-                "uploaded_by": r["uploaded_by"],
-                "upload_date": r["upload_date"],
-                "download_url": f"/api/uploads/id/{r['id']}",
-            }
-            for r in rows
-        ]
+        docs = []
+        for r in rows:
+            # Gestionare tuplu vs dict
+            if isinstance(r, dict):
+                docs.append({
+                    "id": r["id"],
+                    "filename": r["filename"],
+                    "uploaded_by": r["uploaded_by"],
+                    "upload_date": r["upload_date"],
+                    "download_url": f"/api/uploads/id/{r['id']}",
+                })
+            else:
+                docs.append({
+                    "id": r[0],
+                    "filename": r[1],
+                    "uploaded_by": r[2],
+                    "upload_date": r[3],
+                    "download_url": f"/api/uploads/id/{r[0]}",
+                })
+
         return jsonify(docs)
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        con.close()
+
+
+@upload_document_bp.get("/api/uploads/id/<int:doc_id>")
+@token_required  # <--- Doar cei logați descarcă
+def download_file_by_id(doc_id):
+    filename = _get_filename_by_id(doc_id)
+    if not filename:
+        return jsonify({"status": "error", "message": "Document inexistent"}), 404
+
+    return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
 
 
 @upload_document_bp.delete("/api/delete_document/id/<int:doc_id>")
 @token_required
-@admin_required # <-- Doar ADMINII pot șterge
+@admin_required  # <--- Doar ADMIN șterge
 def delete_document_by_id(doc_id):
     filename = _get_filename_by_id(doc_id)
     if not filename:
@@ -182,25 +175,18 @@ def delete_document_by_id(doc_id):
 
     con = get_conn()
     try:
-        # ștergem din disc
+        # 1. Ștergem fizic
         file_path = UPLOAD_DIR / filename
         if file_path.exists():
             os.remove(file_path)
 
-        # ștergem din DB
+        # 2. Ștergem din DB
         with con:
             with con.cursor() as cur:
                 cur.execute("DELETE FROM documente WHERE id = %s", (doc_id,))
+        con.commit()
 
-        return (
-            jsonify(
-                {"status": "success", "message": f"id {doc_id} șters cu succes"}
-            ),
-            200,
-        )
+        return jsonify({"status": "success", "message": "Șters cu succes"}), 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        con.close()
-# -------------------------------------------
