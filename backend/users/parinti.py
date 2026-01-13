@@ -3,7 +3,7 @@ import re
 import json
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
-from ..auth.decorators import token_required
+from ..accounts.decorators import token_required
 
 parinti_bp = Blueprint("parinti", __name__)
 
