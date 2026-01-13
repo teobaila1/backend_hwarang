@@ -35,208 +35,205 @@ def _is_admin(con, username):
 
 
 # ---------------- GET toți copiii (CU AUTO-REPARARE ID-uri) ----------------
+# --- RUTĂ: Admin vede toți copiii (pentru AdminTotiCopiiiSiParintii.jsx) ---
 @toti_copiii_parintilor_bp.get("/api/toti_copiii")
 @token_required
-@admin_required # Vizualizare globală -> ADMIN
+@admin_required
 def toti_copiii():
     try:
         con = get_conn()
+        # Luăm doar userii care au ceva în coloana 'copii'
         rows = con.execute("""
-          SELECT
-            id,
-            username,
-            email,
-            copii,
-            nume_complet,
-            COALESCE(nume_complet, username) AS display_name
-          FROM utilizatori
-          WHERE LOWER(rol) IN ('parinte', 'admin') AND copii IS NOT NULL
+            SELECT id, username, email, nume_complet, copii 
+            FROM utilizatori 
+            WHERE copii IS NOT NULL
         """).fetchall()
 
-        rezultate = []
-
+        rezultat = []
         for r in rows:
-            user_id = r["id"]
-            raw_copii = r["copii"]
-            lista_copii = _safe_load_list(raw_copii)
+            copii_list = _safe_load_list(r["copii"])
 
-            # --- LOGICA DE AUTO-VINDECARE (SELF-HEALING) ---
-            # Verificăm dacă există copii fără ID și le generăm unul acum
-            needs_update = False
-            for copil in lista_copii:
-                # Dacă e dicționar și nu are cheia 'id' sau e goală
-                if isinstance(copil, dict) and not copil.get("id"):
-                    copil["id"] = uuid.uuid4().hex
-                    needs_update = True
+            # Curățăm lista (eliminăm intrările goale dacă există)
+            copii_curati = [c for c in copii_list if isinstance(c, dict) and c.get("nume")]
 
-            # Dacă am găsit copii fără ID, salvăm lista corectată înapoi în DB
-            if needs_update:
-                try:
-                    con.execute(
-                        "UPDATE utilizatori SET copii = %s WHERE id = %s",
-                        (json.dumps(lista_copii, ensure_ascii=False), user_id)
-                    )
-                    con.commit()  # Salvăm reparația permanent
-                    print(f"DEBUG: Am generat ID-uri lipsă pentru userul {r['username']}")
-                except Exception as e:
-                    print(f"Eroare la auto-vindecare ID-uri: {e}")
-            # ------------------------------------------------
+            if copii_curati:
+                rezultat.append({
+                    "parinte": {
+                        "id": r["id"],
+                        "username": r["username"],
+                        "email": r["email"],
+                        "nume_complet": r["nume_complet"]
+                    },
+                    "copii": copii_curati
+                })
 
-            rezultate.append({
-                "parinte": {
-                    "username": r["username"],
-                    "email": r["email"],
-                    "nume_complet": r["nume_complet"],
-                    "display": r["display_name"],
-                },
-                "copii": lista_copii
-            })
+        return jsonify({"status": "success", "date": rezultat}), 200
 
-        return jsonify({"status": "success", "date": rezultate})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ---------------- POST adaugă copil ----------------
+# --- RUTĂ: Părintele își adaugă un copil ---
 @toti_copiii_parintilor_bp.post("/api/adauga_copil")
-@token_required # Părintele adaugă -> Doar logat
+@token_required
 def adauga_copil():
     data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
+
+    # 1. Preluăm datele din Frontend
+    # Frontend-ul trimite "parinte_username" (din localStorage)
+    target_username = data.get("parinte_username")
+
+    # Dacă nu vine username-ul, încercăm să îl luăm din token (pentru siguranță)
+    if not target_username and hasattr(request, 'user_data'):
+        target_username = request.user_data.get('username')
+
     nume = (data.get("nume") or "").strip()
     varsta = data.get("varsta")
-    grupa = _normalize_grupa(data.get("grupa"))
-    gen = (data.get("gen") or "").strip()  # opțional
+    grupa = (data.get("grupa") or "").strip()
+    gen = data.get("gen")
 
-    if not username or not nume or varsta is None or not grupa:
-        return jsonify({"status": "error", "message": "Date incomplete"}), 400
-
-    if isinstance(varsta, str) and varsta.isdigit():
-        varsta = int(varsta)
+    # Validări simple
+    if not target_username:
+        return jsonify({"status": "error", "message": "Nu s-a putut identifica părintele."}), 400
+    if not nume:
+        return jsonify({"status": "error", "message": "Numele copilului este obligatoriu."}), 400
 
     try:
         con = get_conn()
-        row = con.execute(
-            "SELECT copii FROM utilizatori WHERE username = %s AND LOWER(rol) IN ('parinte', 'admin')",
-            (username,)
-        ).fetchone()
-        if not row:
-            return jsonify({"status": "error", "message": "Utilizator inexistent sau nu este Părinte"}), 404
 
-        lista = _safe_load_list(row["copii"])
-        copil_nou = {
-            "id": uuid.uuid4().hex,  # Asigurăm ID la adăugare
+        # 2. Căutăm părintele și luăm lista actuală de copii
+        row = con.execute(
+            "SELECT id, copii FROM utilizatori WHERE username = %s",
+            (target_username,)
+        ).fetchone()
+
+        if not row:
+            return jsonify({"status": "error", "message": "Contul de părinte nu există."}), 404
+
+        parent_id = row["id"]
+        # Decodăm JSON-ul existent (sau listă goală dacă e NULL)
+        lista_copii = _safe_load_list(row["copii"])
+
+        # 3. Creăm obiectul copil nou
+        nou_copil = {
+            "id": uuid.uuid4().hex,  # Generăm un ID unic pentru copil
             "nume": nume,
             "varsta": varsta,
-            "grupa": grupa,
-            "gen": gen or None
+            "gen": gen,
+            "grupa": _normalize_grupa(grupa)
         }
-        lista.append(copil_nou)
 
+        # Îl adăugăm la listă
+        lista_copii.append(nou_copil)
+
+        # 4. Salvăm înapoi în baza de date
         con.execute(
-            "UPDATE utilizatori SET copii = %s WHERE username = %s",
-            (json.dumps(lista, ensure_ascii=False), username)
+            "UPDATE utilizatori SET copii = %s WHERE id = %s",
+            (json.dumps(lista_copii, ensure_ascii=False), parent_id)
         )
         con.commit()
-        return jsonify({"status": "success", "message": "Copil adăugat cu succes"}), 200
+
+        return jsonify({"status": "success", "message": "Copil adăugat cu succes!"}), 200
+
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"Eroare adauga_copil: {e}")  # Ajută la debug în consolă
+        return jsonify({"status": "error", "message": "Eroare server: " + str(e)}), 500
 
 
 # ---------------- ADMIN: PATCH copil ----------------
+# --- RUTĂ: Admin editează un copil specific ---
 @toti_copiii_parintilor_bp.patch("/api/admin/copii/<child_id>")
 @token_required
-@admin_required # Admin edit copil
+@admin_required
 def admin_update_child(child_id):
-    # Verificăm să nu fie undefined din start
-    if not child_id or child_id == "undefined":
-        return jsonify(
-            {"status": "error", "message": "ID copil invalid. Dă refresh la pagină pentru a repara datele."}), 400
-
     data = request.get_json(silent=True) or {}
-    admin_username = (data.get("admin_username") or "").strip()
-    parent_username = (data.get("parent_username") or "").strip()
 
-    if not admin_username or not parent_username:
-        return jsonify({"status": "error", "message": "Lipsește admin_username sau parent_username."}), 400
+    # Avem nevoie de username-ul părintelui pentru a ști în ce rând din DB să căutăm
+    parent_username = data.get("parent_username")
 
-    fields = {}
-    if "nume" in data:    fields["nume"] = (data["nume"] or "").strip()
-    if "gen" in data:     fields["gen"] = (data["gen"] or None)
-    if "grupa" in data:   fields["grupa"] = _normalize_grupa(data["grupa"])
-    if "varsta" in data:
-        try:
-            fields["varsta"] = int(data["varsta"])
-        except:
-            return jsonify({"status": "error", "message": "Vârsta trebuie să fie număr."}), 400
+    # Datele noi
+    nume = data.get("nume")
+    varsta = data.get("varsta")
+    gen = data.get("gen")
+    grupa = data.get("grupa")
+
+    if not parent_username:
+        return jsonify({"status": "error", "message": "Lipsește username-ul părintelui."}), 400
 
     try:
         con = get_conn()
-        if not _is_admin(con, admin_username):
-            return jsonify({"status": "error", "message": "Doar adminul are voie."}), 403
-
-        r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
+        # Găsim părintele
+        row = con.execute(
+            "SELECT id, copii FROM utilizatori WHERE username = %s",
             (parent_username,)
         ).fetchone()
-        if not r:
-            return jsonify({"status": "error", "message": "Părinte inexistent."}), 404
 
-        copii = _safe_load_list(r["copii"])
+        if not row:
+            return jsonify({"status": "error", "message": "Părintele nu a fost găsit."}), 404
 
-        # Căutăm copilul după ID
-        idx = next((i for i, c in enumerate(copii) if str(c.get("id")) == str(child_id)), None)
+        copii_list = _safe_load_list(row["copii"])
+        found = False
 
-        if idx is None:
-            return jsonify({"status": "error", "message": f"Copil cu ID {child_id} nu a fost găsit."}), 404
+        # Căutăm copilul în lista părintelui
+        for c in copii_list:
+            if c.get("id") == child_id:
+                if nume is not None: c["nume"] = nume
+                if varsta is not None: c["varsta"] = varsta
+                if gen is not None: c["gen"] = gen
+                if grupa is not None: c["grupa"] = _normalize_grupa(grupa)
+                found = True
+                break
 
-        copii[idx].update(fields)
+        if not found:
+            return jsonify({"status": "error", "message": "Copilul nu a fost găsit în lista părintelui."}), 404
 
+        # Salvăm
         con.execute(
-            "UPDATE utilizatori SET copii=%s WHERE username=%s",
-            (json.dumps(copii, ensure_ascii=False), parent_username)
+            "UPDATE utilizatori SET copii = %s WHERE id = %s",
+            (json.dumps(copii_list, ensure_ascii=False), row["id"])
         )
         con.commit()
-        return jsonify({"status": "success"})
+
+        return jsonify({"status": "success", "message": "Copil actualizat."}), 200
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 # ---------------- ADMIN: DELETE copil ----------------
+# --- RUTĂ: Admin șterge un copil specific ---
 @toti_copiii_parintilor_bp.delete("/api/admin/copii/<child_id>")
 @token_required
 @admin_required
 def admin_delete_child(child_id):
     data = request.get_json(silent=True) or {}
-    admin_username = (data.get("admin_username") or "").strip()
-    parent_username = (data.get("parent_username") or "").strip()
-    if not admin_username or not parent_username:
-        return jsonify({"status": "error", "message": "Lipsește admin_username sau parent_username."}), 400
+    parent_username = data.get("parent_username")
+
+    if not parent_username:
+        return jsonify({"status": "error", "message": "Lipsește username-ul părintelui."}), 400
 
     try:
         con = get_conn()
-        if not _is_admin(con, admin_username):
-            return jsonify({"status": "error", "message": "Doar adminul are voie."}), 403
-
-        r = con.execute(
-            "SELECT copii FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
-            (parent_username,)
-        ).fetchone()
-        if not r:
+        row = con.execute("SELECT id, copii FROM utilizatori WHERE username=%s", (parent_username,)).fetchone()
+        if not row:
             return jsonify({"status": "error", "message": "Părinte inexistent."}), 404
 
-        copii = _safe_load_list(r["copii"])
-        new_list = [c for c in copii if str(c.get("id")) != str(child_id)]
+        copii_list = _safe_load_list(row["copii"])
 
-        if len(new_list) == len(copii):
-            return jsonify({"status": "error", "message": "Copil inexistent."}), 404
+        # Filtrăm lista ca să eliminăm copilul cu ID-ul respectiv
+        noua_lista = [c for c in copii_list if c.get("id") != child_id]
+
+        if len(noua_lista) == len(copii_list):
+            return jsonify({"status": "error", "message": "Copilul nu a fost găsit."}), 404
 
         con.execute(
-            "UPDATE utilizatori SET copii=%s WHERE username=%s",
-            (json.dumps(new_list, ensure_ascii=False), parent_username)
+            "UPDATE utilizatori SET copii = %s WHERE id = %s",
+            (json.dumps(noua_lista, ensure_ascii=False), row["id"])
         )
         con.commit()
-        return jsonify({"status": "success"})
+
+        return jsonify({"status": "success", "message": "Copil șters."}), 200
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -315,27 +312,23 @@ def admin_update_parent(parent_username):
 
 
 # ---------------- ADMIN: DELETE părinte ----------------
+# --- RUTĂ: Admin șterge complet un părinte ---
 @toti_copiii_parintilor_bp.delete("/api/admin/parinte/<parent_username>")
 @token_required
 @admin_required
 def admin_delete_parent(parent_username):
-    data = request.get_json(silent=True) or {}
-    admin_username = (data.get("admin_username") or "").strip()
-    if not admin_username:
-        return jsonify({"status": "error", "message": "Lipsește admin_username."}), 400
-
     try:
         con = get_conn()
-        if not _is_admin(con, admin_username):
-            return jsonify({"status": "error", "message": "Doar adminul are voie."}), 403
-
+        # Ștergem doar dacă rolul e parinte (sau admin, după caz, dar ai grijă aici)
         cur = con.execute(
-            "DELETE FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
+            "DELETE FROM utilizatori WHERE username=%s",
             (parent_username,)
         )
         if cur.rowcount == 0:
-            return jsonify({"status": "error", "message": "Părinte inexistent."}), 404
+            return jsonify({"status": "error", "message": "Utilizatorul nu există."}), 404
+
         con.commit()
-        return jsonify({"status": "success"})
+        return jsonify({"status": "success", "message": "Părinte șters."}), 200
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
