@@ -48,23 +48,6 @@ def sterge_utilizator(username: str):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@toti_userii_bp.delete("/api/users/<string:username>")
-@token_required
-@admin_required
-def sterge_utilizator(username: str):
-    try:
-        with get_conn() as con:
-            with con.cursor() as cur:
-                cur.execute("DELETE FROM utilizatori WHERE username = %s", (username,))
-                if cur.rowcount == 0:
-                    return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
-
-        return jsonify({"status": "success", "message": "Utilizator șters"}), 200
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 @toti_userii_bp.patch("/api/users/<int:user_id>")
 @token_required
 @admin_required
