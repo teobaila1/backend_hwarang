@@ -11,11 +11,10 @@ toti_userii_bp = Blueprint("toti_userii", __name__)
 @token_required  # <-- Paznic: Trebuie să fii logat
 @admin_required  # <-- Paznic: Trebuie să fii Admin
 def get_all_users():
-    # Nu mai verificăm manual. Dacă a ajuns aici, e sigur Admin.
     with get_conn() as con:
         with con.cursor() as cur:
             cur.execute("""
-                SELECT id, username, email, rol, COALESCE(nume_complet, username) AS display_name
+                SELECT id, username, email, rol, COALESCE(nume_complet, username) AS display_name, grupe
                 FROM utilizatori ORDER BY id DESC
             """)
             rows = cur.fetchall()
@@ -27,6 +26,7 @@ def get_all_users():
             "email": r["email"],
             "rol": r["rol"],
             "display_name": r["display_name"],
+            "grupe": r["grupe"] or ""
         }
         for r in rows
     ])
@@ -47,14 +47,35 @@ def sterge_utilizator(username: str):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@toti_userii_bp.delete("/api/users/<string:username>")
+@token_required
+@admin_required
+def sterge_utilizator(username: str):
+    try:
+        with get_conn() as con:
+            with con.cursor() as cur:
+                cur.execute("DELETE FROM utilizatori WHERE username = %s", (username,))
+                if cur.rowcount == 0:
+                    return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
+
+        return jsonify({"status": "success", "message": "Utilizator șters"}), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @toti_userii_bp.patch("/api/users/<int:user_id>")
 @token_required
 @admin_required
 def update_user(user_id: int):
     data = request.get_json(silent=True) or {}
-    # Nu mai avem nevoie de admin_username din body, îl știm din token
+
     new_username = (data.get("username") or "").strip()
     new_email = (data.get("email") or "").strip()
+
+    # --- MODIFICARE 2: Preluăm 'grupe' din request ---
+    new_grupe = data.get("grupe")  # Poate fi None sau string
 
     if not new_username or not new_email:
         return jsonify({"status": "error", "message": "Nume și email sunt obligatorii"}), 400
@@ -62,12 +83,22 @@ def update_user(user_id: int):
     try:
         with get_conn() as con:
             with con.cursor() as cur:
-                cur.execute("""
-                    UPDATE utilizatori
-                       SET username = %s,
-                           email = %s
-                     WHERE id = %s
-                """, (new_username, new_email, user_id))
+                # Construim query-ul dinamic pentru a include 'grupe' doar dacă e trimis
+                # (Deși frontend-ul tău îl trimite mereu, e bine să fim robuști)
+                fields = ["username = %s", "email = %s"]
+                values = [new_username, new_email]
+
+                if new_grupe is not None:
+                    fields.append("grupe = %s")
+                    values.append(new_grupe)
+
+                # Adăugăm ID-ul pentru WHERE
+                values.append(user_id)
+
+                sql = f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s"
+
+                cur.execute(sql, tuple(values))
+
                 if cur.rowcount == 0:
                     return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
 
