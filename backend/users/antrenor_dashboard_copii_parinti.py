@@ -67,7 +67,7 @@ def antrenor_dashboard_data():
     try:
         # 1) Grupele antrenorului -> set normalizat "Grupa N"
         tr = con.execute(
-            "SELECT grupe FROM utilizatori WHERE LOWER(rol)='antrenor' AND username = %s",
+            "SELECT grupe FROM utilizatori WHERE (LOWER(rol)='antrenor' OR LOWER(rol)='admin') AND username = %s",
             (trainer_username,)
         ).fetchone()
         if not tr:
@@ -95,7 +95,7 @@ def antrenor_dashboard_data():
                 copii,
                 COALESCE(nume_complet, username) AS display_name
             FROM utilizatori
-            WHERE LOWER(rol) = 'parinte'
+            WHERE LOWER(rol) IN ('parinte', 'admin')
         """).fetchall()
 
         for r in rows:
