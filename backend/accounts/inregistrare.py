@@ -108,6 +108,11 @@ def register():
         if not data_nasterii:
             return jsonify({"status": "error", "message": "Data nașterii este obligatorie pentru sportiv"}), 400
 
+        # --- ADAUGĂ ASTA ---
+        if not grupe_input:
+            return jsonify({"status": "error", "message": "Te rugăm să specifici grupa din care faci parte."}), 400
+        # -------------------
+
     elif tip_l == "antrenor":
         if not grupe_input:
             return jsonify({"status": "error", "message": "Grupele sunt obligatorii pentru antrenor"}), 400
