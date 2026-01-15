@@ -157,7 +157,6 @@
 #     return jsonify({"status": "success", "message": "Parolă schimbată"}), 200
 
 
-
 import os
 from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -178,7 +177,6 @@ FRONTEND_URL = os.getenv(
 ).rstrip("/")
 
 
-
 # 📨 Cerere resetare parolă
 @resetare_bp.post("/api/reset-password")
 def cerere_resetare():
@@ -188,29 +186,38 @@ def cerere_resetare():
         return jsonify({"status": "error", "message": "Email lipsă"}), 400
 
     con = get_conn()
-    user = con.execute(
-        "SELECT id, email FROM utilizatori WHERE LOWER(email) = %s",
-        (email,)
-    ).fetchone()
+    try:
+        # Folosim cursor explicit pentru siguranță
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, email FROM utilizatori WHERE LOWER(email) = %s",
+            (email,)
+        )
+        user = cur.fetchone()
 
-    # Nu dezvăluim existența contului → răspuns „success” oricum
-    if not user:
-        return jsonify({"status": "success", "message": "Dacă emailul există, vei primi un link de resetare."}), 200
+        # Nu dezvăluim existența contului → răspuns „success” oricum
+        if not user:
+            return jsonify({"status": "success", "message": "Dacă emailul există, vei primi un link de resetare."}), 200
 
-    token = serializer.dumps(email, salt="resetare-parola")
-    link = f"{FRONTEND_URL}/resetare-parola/{token}"
+        token = serializer.dumps(email, salt="resetare-parola")
+        link = f"{FRONTEND_URL}/resetare-parola/{token}"
 
-    subject = "Resetare parolă - ACS Hwarang"
-    html = f"""
-      <p>Ai cerut resetarea parolei pentru contul tău.</p>
-      <p><a href="{link}" target="_blank" rel="noreferrer">Apasă aici pentru a-ți reseta parola</a></p>
-      <p>Dacă nu ai cerut tu această acțiune, ignoră acest email.</p>
-    """
+        subject = "Resetare parolă - ACS Hwarang"
+        html = f"""
+          <p>Ai cerut resetarea parolei pentru contul tău.</p>
+          <p><a href="{link}" target="_blank" rel="noreferrer">Apasă aici pentru a-ți reseta parola</a></p>
+          <p>Dacă nu ai cerut tu această acțiune, ignoră acest email.</p>
+        """
 
-    # Trimitem prin HTTP (Resend). Nu aruncăm mai departe erorile de rețea.
-    send_email_http(email, subject, html)
+        # Trimitem prin HTTP (Resend). Nu aruncăm mai departe erorile de rețea.
+        send_email_http(email, subject, html)
 
-    return jsonify({"status": "success", "message": "Email trimis. Verifică-ți inbox-ul."}), 200
+        return jsonify({"status": "success", "message": "Email trimis. Verifică-ți inbox-ul."}), 200
+    finally:
+        # E o practică bună să închizi conexiunea/cursorul dacă nu folosim 'with'
+        if 'cur' in locals():
+            cur.close()
+        con.close()
 
 
 # 🛠️ Schimbă parola cu tokenul
@@ -231,19 +238,35 @@ def reseteaza_parola(token):
         return jsonify({"status": "error", "message": "Token invalid sau expirat"}), 400
 
     con = get_conn()
-    cur = con.cursor()
-    row = cur.execute(
-        "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(%s)",
-        (email,)
-    ).fetchone()
-    if not row:
-        return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
+    try:
+        cur = con.cursor()
 
-    hashed = hash_password(parola_noua)
-    cur.execute(
-        "UPDATE utilizatori SET parola = %s WHERE LOWER(email) = LOWER(%s)",
-        (hashed, email)
-    )
-    con.commit()
+        # --- AICI ERA EROAREA ---
+        # Separăm execute de fetchone
+        cur.execute(
+            "SELECT id FROM utilizatori WHERE LOWER(email) = LOWER(%s)",
+            (email,)
+        )
+        row = cur.fetchone()
+        # -----------------------
 
-    return jsonify({"status": "success", "message": "Parolă schimbată"}), 200
+        if not row:
+            return jsonify({"status": "error", "message": "Utilizator inexistent"}), 404
+
+        hashed = hash_password(parola_noua)
+
+        cur.execute(
+            "UPDATE utilizatori SET parola = %s WHERE LOWER(email) = LOWER(%s)",
+            (hashed, email)
+        )
+        con.commit()
+
+        return jsonify({"status": "success", "message": "Parolă schimbată"}), 200
+
+    except Exception as e:
+        con.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+        con.close()
