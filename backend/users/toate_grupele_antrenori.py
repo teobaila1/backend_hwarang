@@ -32,14 +32,13 @@ def _group_sort_key(name: str):
 def toate_grupele_antrenori():
     con = get_conn()
 
-    # 1) toți antrenorii (include și AntrenorExtern dacă vrei)
+    # 1) Selectăm Antrenorii DAR ȘI Adminii care au câmpul 'grupe' completat
     trainers = con.execute("""
-        SELECT id, username,
-               COALESCE(nume_complet, username) AS display_name,
-               grupe
-        FROM utilizatori
-        WHERE LOWER(rol) = 'antrenor'
-    """).fetchall()
+            SELECT id, username, COALESCE(nume_complet, username) AS display_name, grupe 
+            FROM utilizatori 
+            WHERE LOWER(rol) = 'antrenor' 
+               OR (LOWER(rol) = 'admin' AND grupe IS NOT NULL AND length(grupe) > 0)
+        """).fetchall()
 
     # 2) părinți (pentru copii)
     parents = con.execute("""
