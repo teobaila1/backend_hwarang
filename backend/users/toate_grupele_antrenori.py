@@ -11,7 +11,8 @@ toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
 
 
 def normalize_grupa(value):
-    if value is None: return None
+    if value is None:
+        return None
     s = str(value).strip()
     m = re.match(r'^\s*(?:grupa\s*)?(\d+)\s*$', s, re.IGNORECASE)
     return f"Grupa {m.group(1)}" if m else s
@@ -31,14 +32,24 @@ def _group_sort_key(name: str):
 
 
 def ensure_child_ids_and_normalize(children):
+    """
+    Verifică fiecare copil. Dacă nu are ID, îi generează unul.
+    Normalizează grupa și vârsta.
+    Returnează (True, lista_noua) dacă s-a modificat ceva.
+    """
     changed = False
     for c in children:
+        # 1. Generare ID
         if "id" not in c or not c["id"]:
             c["id"] = uuid.uuid4().hex
             changed = True
+
+        # 2. Normalizare vârstă
         if "varsta" in c and isinstance(c["varsta"], str) and c["varsta"].isdigit():
             c["varsta"] = int(c["varsta"])
             changed = True
+
+        # 3. Normalizare grupă
         if "grupa" in c:
             ng = normalize_grupa(c["grupa"])
             if ng != c["grupa"]:
@@ -53,21 +64,33 @@ def ensure_child_ids_and_normalize(children):
 def toate_grupele_antrenori():
     con = get_conn()
 
-    # 1. AUTO-REPAIR Părinți
+    # --- 1. AUTO-REPAIR: Reparăm copiii fără ID din toată baza de date ---
     try:
+        # Luăm toți utilizatorii care au copii
         users_with_kids = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
+
         for u in users_with_kids:
             children = _safe_load_children(u["copii"])
-            if not children: continue
+            if not children:
+                continue
+
+            # Verificăm și reparăm
             was_changed, fixed_children = ensure_child_ids_and_normalize(children)
+
             if was_changed:
-                con.execute("UPDATE utilizatori SET copii = %s WHERE id = %s",
-                            (json.dumps(fixed_children, ensure_ascii=False), u["id"]))
+                # Salvăm înapoi în DB imediat
+                con.execute(
+                    "UPDATE utilizatori SET copii = %s WHERE id = %s",
+                    (json.dumps(fixed_children, ensure_ascii=False), u["id"])
+                )
                 con.commit()
     except Exception as e:
-        print(f"[WARN] Eroare repair: {e}")
+        print(f"[WARN] Eroare la auto-repair admin: {e}")
+        # Continuăm execuția chiar dacă auto-repair dă eroare, ca să afișăm datele
 
-    # 2. Antrenorii
+    # --- 2. Interogare date pentru afișare ---
+
+    # Antrenorii + Adminii care antrenează
     trainers = con.execute("""
             SELECT id, username, COALESCE(nume_complet, username) AS display_name, grupe 
             FROM utilizatori 
@@ -75,19 +98,26 @@ def toate_grupele_antrenori():
                OR (LOWER(rol) = 'admin' AND grupe IS NOT NULL AND length(grupe) > 0)
         """).fetchall()
 
-    # 3. Părinții
+    # Părinții (luăm datele proaspete, posibil reparate mai sus)
     parents = con.execute("""
-        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, copii
+        SELECT username, email,
+               COALESCE(nume_complet, username) AS display_name,
+               copii
         FROM utilizatori
         WHERE LOWER(rol) IN ('parinte', 'admin')
     """).fetchall()
 
-    # 4. Sportivii Independenți
-    sportivi = con.execute("""
-        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, grupe, varsta
-        FROM utilizatori
-        WHERE LOWER(rol) = 'sportiv'
-    """).fetchall()
+    parsed_parents = []
+    for p in parents:
+        kids = _safe_load_children(p["copii"])
+        if not kids:
+            continue
+        parsed_parents.append({
+            "username": p["username"],
+            "email": p["email"],
+            "display": p["display_name"],
+            "copii": kids
+        })
 
     out = []
 
@@ -95,12 +125,11 @@ def toate_grupele_antrenori():
         groups_raw = [g.strip() for g in (tr["grupe"] or "").split(",") if g.strip()]
         groups = [normalize_grupa(g) for g in groups_raw]
         groups = [g for g in groups if g]
+
         groups_map = {g: [] for g in groups}
 
-        # A. Adăugăm copiii părinților
-        for p in parents:
-            kids = _safe_load_children(p["copii"])
-            for c in kids:
+        for p in parsed_parents:
+            for c in p["copii"]:
                 g = normalize_grupa(c.get("grupa"))
                 if g in groups_map:
                     groups_map[g].append({
@@ -112,28 +141,7 @@ def toate_grupele_antrenori():
                         "_parent": {
                             "username": p["username"],
                             "email": p["email"],
-                            "display": p["display_name"]
-                        }
-                    })
-
-        # B. Adăugăm sportivii independenți
-        for s in sportivi:
-            g_raw = s["grupe"]
-            if not g_raw: continue
-            s_groups = [normalize_grupa(x) for x in g_raw.split(",")]
-
-            for g_s in s_groups:
-                if g_s in groups_map:
-                    groups_map[g_s].append({
-                        "id": str(s["id"]),
-                        "nume": s["display_name"],
-                        "varsta": s["varsta"],
-                        "gen": "—",  # Nu avem gen la user root momentan
-                        "grupa": g_s,
-                        "_parent": {
-                            "username": s["username"],
-                            "email": s["email"],
-                            "display": f"{s['display_name']} (Sportiv)"
+                            "display": p["display"]
                         }
                     })
 
@@ -149,4 +157,5 @@ def toate_grupele_antrenori():
         })
 
     out.sort(key=lambda r: (r.get("antrenor_display") or r.get("antrenor") or "").lower())
+
     return jsonify({"status": "success", "data": out}), 200

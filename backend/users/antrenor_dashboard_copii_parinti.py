@@ -5,7 +5,7 @@ import json
 from flask import request, jsonify, Blueprint
 
 from ..accounts.decorators import token_required
-from ..config import get_conn
+from ..config import get_conn  # ✅ sursă unică pentru DB
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
 
@@ -27,14 +27,24 @@ def _safe_load_children(copii_json):
 
 
 def ensure_child_ids_and_normalize(children):
+    """
+    Verifică fiecare copil. Dacă nu are ID, îi generează unul.
+    Normalizează grupa și vârsta.
+    Returnează (True, lista_noua) dacă s-a modificat ceva, altfel (False, lista_veche).
+    """
     changed = False
     for c in children:
+        # 1. GENERARE ID DACĂ LIPSEȘTE (Asta rezolvă problema cu butonul gri)
         if "id" not in c or not c["id"]:
             c["id"] = uuid.uuid4().hex
             changed = True
+
+        # 2. Vârsta număr
         if "varsta" in c and isinstance(c["varsta"], str) and c["varsta"].isdigit():
             c["varsta"] = int(c["varsta"])
             changed = True
+
+        # 3. Normalizare grupă
         if "grupa" in c:
             ng = _normalize_grupa(c["grupa"])
             if ng != c["grupa"]:
@@ -43,9 +53,15 @@ def ensure_child_ids_and_normalize(children):
     return changed, children
 
 
+# -----------------------------
+
+
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
 @token_required
 def antrenor_dashboard_data():
+    """
+    Returnează datele pentru dashboard și REPARĂ automat copiii fără ID.
+    """
     data = request.get_json(silent=True) or {}
     trainer_username = (data.get("username") or "").strip()
     if not trainer_username:
@@ -53,7 +69,7 @@ def antrenor_dashboard_data():
 
     con = get_conn()
     try:
-        # 1. Aflăm ce grupe are voie antrenorul/adminul
+        # 1) Aflăm ce grupe are voie să vadă acest user (Antrenor sau Admin)
         tr = con.execute("""
             SELECT grupe FROM utilizatori 
             WHERE (LOWER(rol)='antrenor' OR LOWER(rol)='admin') 
@@ -72,126 +88,120 @@ def antrenor_dashboard_data():
         if not allowed:
             return jsonify({"status": "success", "date": []}), 200
 
+        # 2) Inițializăm structura
         results = [{"grupa": g, "parinte": None, "copii": []} for g in allowed]
 
-        # --- A. Procesăm PĂRINȚII și copiii lor ---
-        parents = con.execute("""
-            SELECT id, username, email, copii, COALESCE(nume_complet, username) AS display_name
+        # 3) Luăm toți părinții/adminii care au copii
+        rows = con.execute("""
+            SELECT
+                id,
+                username,
+                email,
+                copii,
+                COALESCE(nume_complet, username) AS display_name
             FROM utilizatori
             WHERE LOWER(rol) IN ('parinte', 'admin') AND copii IS NOT NULL
         """).fetchall()
 
-        for r in parents:
+        # --- AICI ESTE FIX-UL ---
+        # Iterăm prin toți părinții. Dacă găsim copii fără ID, îi reparăm și salvăm în DB.
+
+        for r in rows:
             children = _safe_load_children(r["copii"])
-            if not children: continue
+            if not children:
+                continue
 
+            # Apelează funcția de reparare
             was_changed, fixed_children = ensure_child_ids_and_normalize(children)
-            if was_changed:
-                con.execute("UPDATE utilizatori SET copii = %s WHERE id = %s",
-                            (json.dumps(fixed_children, ensure_ascii=False), r["id"]))
-                con.commit()
-                children = fixed_children
 
+            if was_changed:
+                # Dăm UPDATE în baza de date imediat, ca să fie permanent
+                con.execute(
+                    "UPDATE utilizatori SET copii = %s WHERE id = %s",
+                    (json.dumps(fixed_children, ensure_ascii=False), r["id"])
+                )
+                con.commit()  # Salvăm modificarea
+                children = fixed_children  # Folosim lista reparată pentru afișare
+
+            # --- FILTRARE PENTRU DASHBOARD ---
+            # Acum copiii au sigur ID-uri
             by_group = {}
             for c in children:
-                g = _normalize_grupa(c.get("grupa"))
-                if g in allowed:
-                    by_group.setdefault(g, []).append({
-                        "id": c.get("id"),
-                        "nume": c.get("nume"),
-                        "varsta": c.get("varsta"),
-                        "gen": c.get("gen"),
-                        "grupa": g,
-                    })
+                g = _normalize_grupa(c.get("grupa")) or "Fără grupă"
+                if g not in allowed:
+                    continue
+                by_group.setdefault(g, []).append({
+                    "id": c.get("id"),  # Acum există sigur!
+                    "nume": c.get("nume"),
+                    "varsta": c.get("varsta"),
+                    "gen": c.get("gen"),
+                    "grupa": g,
+                })
 
+            if not by_group:
+                continue
+
+            # Construim răspunsul
             for gname, kids in by_group.items():
                 results.append({
                     "grupa": gname,
                     "parinte": {
                         "id": r["id"],
-                        "username": r["username"],
+                        "username": r["username"] or "—",
                         "email": r["email"],
                         "display": r["display_name"],
                     },
                     "copii": kids
                 })
 
-        # --- B. Procesăm SPORTIVII INDEPENDENȚI (Fix-ul Tău) ---
-        sportivi = con.execute("""
-            SELECT id, username, email, nume_complet, grupe, varsta, data_nasterii
-            FROM utilizatori
-            WHERE LOWER(rol) = 'sportiv'
-        """).fetchall()
-
-        for s in sportivi:
-            # Grupa sportivului e în coloana 'grupe' (text), nu în JSON
-            g_raw = s["grupe"]
-            if not g_raw: continue
-
-            # Un sportiv poate fi în mai multe grupe teoretic, dar de obicei e una
-            sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
-
-            # Verificăm dacă vreuna din grupele sportivului e gestionată de antrenor
-            for g_s in sportiv_groups:
-                if g_s in allowed:
-                    # Îl adăugăm ca și cum ar fi propriul copil
-                    # Calculăm un display name
-                    display_name = s["nume_complet"] or s["username"]
-
-                    # Creăm obiectul "copil" din datele sportivului
-                    virtual_child = {
-                        "id": str(s["id"]),  # Folosim ID-ul userului ca ID de copil
-                        "nume": display_name,
-                        "varsta": s["varsta"],  # Sau calcul din data_nasterii dacă varsta e null
-                        "gen": "M/F",
-                        # Aici e un mic lips (genul nu e mereu stocat la user root), poți pune generic sau adăuga col
-                        "grupa": g_s
-                    }
-
-                    results.append({
-                        "grupa": g_s,
-                        "parinte": {
-                            "id": s["id"],
-                            "username": s["username"],
-                            "email": s["email"],
-                            "display": f"{display_name} (Sportiv Independent)"
-                        },
-                        "copii": [virtual_child]
-                    })
-
-        # Sortare
+        # 4) Sortare
         def group_key(name: str):
             import re
             m = re.search(r"(\d+)", name or "")
             return (int(m.group(1)) if m else 9999, (name or "").lower())
 
-        results.sort(key=lambda x: (group_key(x["grupa"]), (x["parinte"] or {}).get("display", "")))
+        results.sort(key=lambda x: (group_key(x["grupa"]),
+                                    (x["parinte"] or {}).get("display",
+                                                             (x["parinte"] or {}).get("username", ""))).__str__())
 
         return jsonify({"status": "success", "date": results}), 200
 
     except Exception as e:
+        print(f"Eroare dashboard: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @antrenor_dashboard_copii_parinti_bp.route("/api/copiii_mei", methods=["POST"])
 @token_required
 def copiii_mei():
-    # Rămâne neschimbat, e pentru părinți
     data = request.get_json(silent=True) or {}
     username = data.get("username")
-    if not username: return jsonify({"status": "error"}), 400
+    if not username:
+        return jsonify({"status": "error", "message": "Lipsă username"}), 400
+
     try:
         con = get_conn()
         cur = con.cursor()
-        cur.execute("SELECT id, copii FROM utilizatori WHERE username=%s", (username,))
+        cur.execute(
+            "SELECT id, copii FROM utilizatori WHERE username = %s AND LOWER(rol) IN ('parinte', 'admin')",
+            (username,)
+        )
         row = cur.fetchone()
-        if not row: return jsonify({"status": "error"}), 404
+        if not row:
+            return jsonify({"status": "error", "message": "Părinte inexistent sau fără copii"}), 404
+
         copii = _safe_load_children(row["copii"])
+
+        # Auto-repair și aici, just in case
         changed, copii = ensure_child_ids_and_normalize(copii)
         if changed:
-            cur.execute("UPDATE utilizatori SET copii=%s WHERE id=%s",
-                        (json.dumps(copii, ensure_ascii=False), row["id"]))
+            cur.execute(
+                "UPDATE utilizatori SET copii = %s WHERE id = %s",
+                (json.dumps(copii, ensure_ascii=False), row["id"])
+            )
             con.commit()
+
         return jsonify({"status": "success", "copii": copii})
+
     except Exception as e:
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
