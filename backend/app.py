@@ -7,7 +7,7 @@ from backend.competitions.adauga_concurs import adauga_concurs_bp
 from backend.mails.evidenta_plati import evidenta_plati_bp
 from backend.competitions.numar_inscrisi import numar_inscrisi_bp
 from backend.competitions.creare_get_concurs import creare_get_concurs_bp
-from backend.users.editare_elev_sportiv import editare_elev_bp
+# from backend.users.editare_elev_sportiv import editare_elev_bp
 from backend.users.toti_copiii_parintilor import toti_copiii_parintilor_bp
 from backend.users.toate_grupele_antrenori import toate_grupele_antrenori_bp
 from backend.competitions.inscrieri_concursuri_toti import inscriere_concurs_toti_bp
