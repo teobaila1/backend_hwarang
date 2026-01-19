@@ -1,15 +1,13 @@
-import os
-
 import jwt
 import datetime
 import json
 from flask import Blueprint, request, jsonify
-from backend.config import get_conn
+from backend.config import get_conn, SECRET_KEY
 from backend.passwords.security import check_password
 
 autentificare_bp = Blueprint('autentificare', __name__)
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
+
 @autentificare_bp.post('/api/login')
 def login():
     data = request.get_json(silent=True) or {}
@@ -24,8 +22,9 @@ def login():
         cur = con.cursor()
 
         # 1. Căutăm utilizatorul (după username sau email)
+        # --- FIX: Cerem coloana 'parola', NU 'password' ---
         cur.execute("""
-            SELECT id, username, password, email, nume_complet, is_placeholder, parola 
+            SELECT id, username, email, nume_complet, is_placeholder, parola 
             FROM utilizatori 
             WHERE LOWER(username) = LOWER(%s) OR LOWER(email) = LOWER(%s)
         """, (username_input, username_input))
@@ -35,9 +34,8 @@ def login():
         if not user:
             return jsonify({"status": "error", "message": "Date de autentificare invalide."}), 401
 
-        # Verificăm parola (suportă și coloana veche 'parola' și cea nouă 'password' dacă ai făcut schimbarea,
-        # aici folosim 'parola' conform structurii tale vechi)
-        stored_password = user['parola']  # sau user['password']
+        # Luăm parola hash-uită din coloana 'parola'
+        stored_password = user['parola']
 
         if stored_password == 'NO_LOGIN_ACCOUNT':
             return jsonify({"status": "error", "message": "Acest cont nu are setată o parolă (este placeholder)."}), 403
@@ -52,24 +50,35 @@ def login():
         cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
         rol_row = cur.fetchone()
 
-        # Fallback: Dacă nu are rol în tabelul nou, luăm din tabelul vechi (dar ar trebui să aibă)
+        # Fallback: Dacă nu are rol în tabelul nou, luăm din tabelul vechi (backup)
         if rol_row:
             user_role = rol_row['rol']
         else:
-            # Backup
-            cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
-            user_role = cur.fetchone()['rol']
+            # Încercăm să citim din tabela veche dacă există coloana rol
+            try:
+                cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
+                user_role = cur.fetchone()['rol']
+            except:
+                user_role = "Sportiv"  # Default
 
         # 3. CITIM COPIII DIN TABELUL NOU 'COPII' (Doar dacă e părinte)
         lista_copii = []
         if user_role == 'Parinte':
-            cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
+            # Verificăm dacă există coloana grupa_text sau grupa (pentru compatibilitate)
+            try:
+                cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
+            except:
+                con.rollback()  # În caz că nu există grupa_text, încercăm fără
+                cur.execute("SELECT nume, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
+
             rows_copii = cur.fetchall()
             for c in rows_copii:
+                # Extragem grupa sigur
+                grp = c.get('grupa_text') or c.get('grupa') or ""
                 lista_copii.append({
                     "nume": c['nume'],
-                    "grupa": c['grupa_text'],
-                    "varsta": str(c['data_nasterii']) if c['data_nasterii'] else ""
+                    "grupa": grp,
+                    "varsta": str(c['data_nasterii']) if c.get('data_nasterii') else ""
                 })
 
         # 4. Generăm Token
