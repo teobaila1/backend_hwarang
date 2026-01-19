@@ -1,5 +1,4 @@
 import os
-
 import jwt
 import datetime
 import json
@@ -8,7 +7,6 @@ from backend.config import get_conn
 from backend.passwords.security import check_password
 
 autentificare_bp = Blueprint('autentificare', __name__)
-
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 
@@ -26,8 +24,7 @@ def login():
     try:
         cur = con.cursor()
 
-        # 1. Căutăm utilizatorul (după username sau email)
-        # IMPORTANT: Cerem coloana 'parola' (vechea denumire din baza ta)
+        # 1. Căutăm utilizatorul
         cur.execute("""
             SELECT id, username, email, nume_complet, is_placeholder, parola 
             FROM utilizatori 
@@ -39,52 +36,56 @@ def login():
         if not user:
             return jsonify({"status": "error", "message": "Utilizatorul nu există."}), 401
 
-        # --- FIX ROBUST PENTRU CITIREA PAROLEI ---
+        # --- FIX SUPREM PENTRU PAROLĂ ---
         raw_pass = user['parola']
         stored_password = ""
 
         if raw_pass:
+            # Convertim orice ar fi în string
             if isinstance(raw_pass, bytes):
-                # Cazul 1: Baza de date returnează bytes (ex: b'$2b$...')
-                # Trebuie decodat în string UTF-8
                 stored_password = raw_pass.decode('utf-8').strip()
             else:
-                # Cazul 2: Baza de date returnează string (ex: '$2b$...')
-                # Doar curățăm spațiile
                 stored_password = str(raw_pass).strip()
 
-        # ----------------------------------------
+            # ELIMINĂM ARTEFACTELE PYTHON (b'...')
+            # Aceasta este linia care repară parolele vechi
+            if stored_password.startswith("b'") and stored_password.endswith("'"):
+                stored_password = stored_password[2:-1]
+            elif stored_password.startswith('b"') and stored_password.endswith('"'):
+                stored_password = stored_password[2:-1]
 
         if stored_password == 'NO_LOGIN_ACCOUNT':
-            return jsonify({"status": "error", "message": "Acest cont nu are setată o parolă (este placeholder)."}), 403
+            return jsonify({"status": "error", "message": "Acest cont este placeholder."}), 403
 
-        # Verificăm parola
+        # --- VERIFICARE ---
         is_valid = False
+
+        # A. Metoda Hash (Normală)
         try:
-            # check_password ar trebui să primească (parola_in_clar, hash_ul_din_db)
-            is_valid = check_password(password_input, stored_password)
-        except Exception as e:
-            print(f"[LOGIN ERROR] Eroare verificare hash: {e}")
-            is_valid = False
+            if check_password(password_input, stored_password):
+                is_valid = True
+        except Exception:
+            pass
+
+        # B. Metoda Fallback (Text Simplu) - Doar dacă A eșuează
+        if not is_valid:
+            if stored_password == password_input:
+                is_valid = True
 
         if not is_valid:
-            # Debugging: Ajută să vezi în logs ce compară (doar hash-ul, nu parola clară)
-            print(f"[LOGIN FAIL] Input User: {username_input}")
-            print(f"[LOGIN FAIL] Hash DB (final): '{stored_password}'")
+            print(f"[LOGIN FAIL] User: {username_input} | Hash curatat: {stored_password}")
             return jsonify({"status": "error", "message": "Parolă incorectă."}), 401
 
-        # --- DACA PAROLA E OK, PRELUĂM DATELE ---
+        # --- LOGIN REUȘIT: Preluăm datele ---
         user_id = user['id']
         username_real = user['username']
 
-        # 2. CITIM ROLUL
+        # Citim Rolul
         cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
         rol_row = cur.fetchone()
-
         if rol_row:
             user_role = rol_row['rol']
         else:
-            # Fallback la tabelul vechi
             try:
                 cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
                 res = cur.fetchone()
@@ -92,7 +93,7 @@ def login():
             except:
                 user_role = "Sportiv"
 
-        # 3. CITIM COPIII (Doar dacă e părinte)
+        # Citim Copiii (Dacă e părinte)
         lista_copii = []
         if user_role == 'Parinte':
             try:
@@ -104,13 +105,10 @@ def login():
             rows_copii = cur.fetchall()
             for c in rows_copii:
                 grp = c.get('grupa_text') or c.get('grupa') or ""
-                lista_copii.append({
-                    "nume": c['nume'],
-                    "grupa": grp,
-                    "varsta": str(c['data_nasterii']) if c.get('data_nasterii') else ""
-                })
+                dob = str(c['data_nasterii']) if c.get('data_nasterii') else ""
+                lista_copii.append({"nume": c['nume'], "grupa": grp, "varsta": dob})
 
-        # 4. Generăm Token
+        # Generăm Token
         token = jwt.encode({
             'user_id': user_id,
             'username': username_real,
@@ -130,7 +128,6 @@ def login():
         }), 200
 
     except Exception as e:
-        print(f"[LOGIN CRASH] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
