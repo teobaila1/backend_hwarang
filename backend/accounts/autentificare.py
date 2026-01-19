@@ -1,13 +1,15 @@
+import os
+
 import jwt
 import datetime
 import json
 from flask import Blueprint, request, jsonify
-from backend.config import get_conn, SECRET_KEY
+from backend.config import get_conn
 from backend.passwords.security import check_password
 
 autentificare_bp = Blueprint('autentificare', __name__)
 
-
+SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 @autentificare_bp.post('/api/login')
 def login():
     data = request.get_json(silent=True) or {}
