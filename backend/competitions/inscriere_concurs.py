@@ -1,79 +1,60 @@
+import json
+from datetime import datetime
 from flask import Blueprint, request, jsonify
-
+from ..config import get_conn
 from ..accounts.decorators import token_required
-from ..config import get_conn  # o singură sursă pentru DB
 
 inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 
+
 @inscriere_concurs_bp.post('/api/inscriere_concurs')
-@token_required # Trebuie să fie logat ca să se înscrie
+@token_required
 def inscriere_concurs():
     data = request.get_json(silent=True) or {}
 
-    username = (data.get('username') or '').strip()
-    concurs  = (data.get('concurs')  or '').strip()
+    # Datele vin din frontend
+    username = data.get('username')
+    nume_concurs = data.get('concurs')
+    nume_sportiv = data.get('nume')
+    data_nasterii = data.get('dataNasterii')
+    categorie = data.get('categorieVarsta')
+    grad = data.get('gradCentura')
+    greutate = data.get('greutate')
+    inaltime = data.get('inaltime')
+    probe = data.get('probe')
+    gen = data.get('gen')
 
-    # câmpuri din formular
-    nume            = (data.get("nume")            or "").strip()
-    data_nasterii   = (data.get("dataNasterii")    or "").strip()
-    categorie_varsta= (data.get("categorieVarsta") or "").strip()
-    grad_centura    = (data.get("gradCentura")     or "").strip()
-    greutate        = (data.get("greutate")        or "").strip()
-    # --- MODIFICARE AICI: Citim inaltimea ---
-    inaltime = (data.get("inaltime") or "").strip()
-    # ----------------------------------------
-    probe           = data.get("probe")  # poate fi listă sau string
-    gen             = (data.get("gen")            or "").strip()
-
-    # validări minime
-    if not username or not concurs:
-        return jsonify({"status": "error", "message": "Date lipsă: username și concurs sunt obligatorii."}), 400
-    if not nume:
-        return jsonify({"status": "error", "message": "Câmpul 'nume' este obligatoriu."}), 400
-
-    # normalizăm 'probe' (acceptăm listă sau string)
-    if isinstance(probe, list):
-        probe = ", ".join([str(x).strip() for x in probe if str(x).strip()])
-    elif probe is None:
-        probe = ""
+    # Validări minime
+    if not all([username, nume_concurs, nume_sportiv, probe]):
+        return jsonify({"status": "error", "message": "Date incomplete."}), 400
 
     try:
         con = get_conn()
+        cur = con.cursor()
 
-        # emailul se obține din tabela utilizatori
-        row = con.execute("SELECT email FROM utilizatori WHERE username = %s", (username,)).fetchone()
-        if not row:
-            return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
-        email = row["email"]
+        # Inserăm în tabelul inscrieri (presupunând că există și are structura asta)
+        # NOTĂ: Aici nu s-a schimbat nimic în baza de date la concursuri, deci inserarea e standard.
+        # Singura chestie e că frontend-ul trimite datele gata completate.
 
-        # Asigurăm tabela (include și 'gen')
-        con.execute("""
-                    CREATE TABLE IF NOT EXISTS inscrieri_concursuri (
-                        id               SERIAL PRIMARY KEY,
-                        email            TEXT,
-                        username         TEXT,
-                        concurs          TEXT,
-                        nume             TEXT,
-                        data_nasterii    TEXT,
-                        categorie_varsta TEXT,
-                        grad_centura     TEXT,
-                        greutate         TEXT,
-                        inaltime         TEXT,
-                        probe            TEXT,
-                        gen              TEXT
-                    )
-                """)
+        # Verificăm duplicat
+        cur.execute("""
+            SELECT id FROM inscrieri 
+            WHERE concurs = %s AND nume_sportiv = %s
+        """, (nume_concurs, nume_sportiv))
 
-        # Inserăm cererea
-        con.execute("""
-            INSERT INTO inscrieri_concursuri
-                (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, inaltime, probe, gen)
-            VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (email, username, concurs, nume, data_nasterii, categorie_varsta, grad_centura, greutate, inaltime, probe, gen))
+        if cur.fetchone():
+            return jsonify({"status": "error", "message": "Sportivul este deja înscris la acest concurs."}), 409
+
+        cur.execute("""
+            INSERT INTO inscrieri (
+                username_parinte, concurs, nume_sportiv, data_nasterii, 
+                categorie, grad, greutate, inaltime, probe, gen, data_inscriere
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (username, nume_concurs, nume_sportiv, data_nasterii, categorie, grad, greutate, inaltime, probe, gen))
+
         con.commit()
-
-        return jsonify({"status": "success", "message": f"Cererea pentru „{concurs}” a fost trimisă!"}), 201
+        return jsonify({"status": "success", "message": "Înscriere reușită!"}), 201
 
     except Exception as e:
+        con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500

@@ -282,7 +282,8 @@ def delete_student(elev_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 5. SUGESTII ---
+
+# --- 5. SUGESTII PENTRU ÎNSCRIERE CONCURS ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 @token_required
 def sugestii_inscriere():
@@ -291,27 +292,45 @@ def sugestii_inscriere():
 
     try:
         con = get_conn()
-        row = con.execute("SELECT rol, nume_complet, copii FROM utilizatori WHERE username=%s", (username,)).fetchone()
+        cur = con.cursor()
+
+        # 1. Identificăm utilizatorul curent (ID, Rol, Nume)
+        # Putem lua rolul și din tabelul 'roluri', dar pentru simplitate îl luăm din utilizatori dacă există,
+        # sau facem un join. Aici presupunem că există coloana 'rol' în utilizatori (migrarea nu o șterge).
+        cur.execute("SELECT id, rol, nume_complet FROM utilizatori WHERE username=%s", (username,))
+        row = cur.fetchone()
+
         if not row: return jsonify({"status": "error", "message": "User not found"}), 404
 
-        u = dict(row)
-        rol = (u.get("rol") or "").lower()
-        nume = u.get("nume_complet") or username
-        copii = []
+        user_id = row['id']
+        rol = (row['rol'] or "").lower()
+        nume_propriu = row['nume_complet'] or username
+        copii_list = []
 
+        # 2. Dacă e Părinte sau Admin, îi căutăm copiii în tabelul SQL 'copii'
         if rol in ['parinte', 'admin']:
-            raw = u.get("copii")
-            if raw:
-                lst = _safe_load_list(raw)
-                for c in lst:
-                    if isinstance(c, dict):
-                        copii.append({"nume": c.get("nume"), "grupa": c.get("grupa")})
+            cur.execute("SELECT nume, grupa_text FROM copii WHERE id_parinte = %s", (user_id,))
+            rows_copii = cur.fetchall()
 
+            for c in rows_copii:
+                copii_list.append({
+                    "nume": c['nume'],
+                    "grupa": c['grupa_text']
+                })
+
+        # 3. Dacă e Sportiv, se sugerează doar pe el (frontend-ul se ocupă de asta folosind 'nume_propriu',
+        # dar putem trimite lista goală la copii)
         elif rol == 'sportiv':
-            # Dacă e sportiv, se înscrie pe el însuși
             pass
 
-        return jsonify({"status": "success", "data": {"rol": rol, "nume_propriu": nume, "copii": copii}})
+        return jsonify({
+            "status": "success",
+            "data": {
+                "rol": rol,
+                "nume_propriu": nume_propriu,
+                "copii": copii_list
+            }
+        })
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

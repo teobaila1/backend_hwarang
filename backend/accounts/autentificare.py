@@ -1,111 +1,95 @@
 import jwt
 import datetime
-import os
+import json
 from flask import Blueprint, request, jsonify
-from ..config import get_conn
-from ..passwords.security import hash_password, check_password  # wrappers peste werkzeug
+from backend.config import get_conn, SECRET_KEY
+from backend.passwords.security import check_password
 
-# ATENȚIE: Această cheie trebuie să fie aceeași cu cea din 'decorators.py'
-# În producție, folosește un fișier .env pentru a o ascunde.
-SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
-
-autentificare_bp = Blueprint("autentificare", __name__)
+autentificare_bp = Blueprint('autentificare', __name__)
 
 
-@autentificare_bp.post("/api/login")
+@autentificare_bp.post('/api/login')
 def login():
     data = request.get_json(silent=True) or {}
+    username_input = (data.get('username') or "").strip()
+    password_input = data.get('password')
 
-    username_or_email = (data.get("username") or data.get("email") or "").strip()
-    password = (data.get("password") or data.get("parola") or "").strip()
+    if not username_input or not password_input:
+        return jsonify({"status": "error", "message": "Username și parola sunt obligatorii!"}), 400
 
-    if not username_or_email or not password:
-        return jsonify({"status": "error", "message": "Date incomplete."}), 400
-
+    con = get_conn()
     try:
-        with get_conn() as con:
-            with con.cursor() as cur:
-                # Căutăm utilizatorul după username SAU email (case-insensitive)
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        username,
-                        email,
-                        parola,
-                        rol,
-                        grupe
-                    FROM utilizatori
-                    WHERE LOWER(username) = LOWER(%s)
-                       OR LOWER(email) = LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (username_or_email, username_or_email),
-                )
-                user = cur.fetchone()
+        cur = con.cursor()
 
-                if not user:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Utilizator sau parolă incorecte."
-                    }), 401
+        # 1. Căutăm utilizatorul (după username sau email)
+        cur.execute("""
+            SELECT id, username, password, email, nume_complet, is_placeholder, parola 
+            FROM utilizatori 
+            WHERE LOWER(username) = LOWER(%s) OR LOWER(email) = LOWER(%s)
+        """, (username_input, username_input))
 
-                stored_password = (user.get("parola") or "").strip()
+        user = cur.fetchone()
 
-                # ── Verificare parolă ────────────────────────────────────────────────
-                is_valid = False
+        if not user:
+            return jsonify({"status": "error", "message": "Date de autentificare invalide."}), 401
 
-                if stored_password.startswith("pbkdf2:"):
-                    # parola este deja hash-uită -> verificăm cu check_password
-                    is_valid = check_password(stored_password, password)
-                else:
-                    # parola veche, probabil în clar -> comparăm direct
-                    if stored_password == password:
-                        is_valid = True
-                    else:
-                        is_valid = False
+        # Verificăm parola (suportă și coloana veche 'parola' și cea nouă 'password' dacă ai făcut schimbarea,
+        # aici folosim 'parola' conform structurii tale vechi)
+        stored_password = user['parola']  # sau user['password']
 
-                if not is_valid:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Utilizator sau parolă incorecte."
-                    }), 401
+        if stored_password == 'NO_LOGIN_ACCOUNT':
+            return jsonify({"status": "error", "message": "Acest cont nu are setată o parolă (este placeholder)."}), 403
 
-                # ── Migrare automată la hash pbkdf2 dacă parola nu e încă hash-uită ─
-                if stored_password and not stored_password.startswith("pbkdf2:"):
-                    new_hash = hash_password(password)
-                    cur.execute(
-                        "UPDATE utilizatori SET parola = %s WHERE id = %s",
-                        (new_hash, user["id"]),
-                    )
-                    con.commit()
+        if not check_password(password_input, stored_password):
+            return jsonify({"status": "error", "message": "Parolă incorectă."}), 401
 
-                # ── GENERARE TOKEN JWT (NOU) ─────────────────────────────────────────
-                # Creăm un "pașaport" digital care expiră în 24 de ore
-                token_payload = {
-                    "id": user["id"],
-                    "username": user["username"],
-                    "rol": (user["rol"] or "").lower(),
-                    "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-                }
+        user_id = user['id']
+        username_real = user['username']
 
-                token = jwt.encode(token_payload, SECRET_KEY, algorithm="HS256")
-                # ─────────────────────────────────────────────────────────────────────
+        # 2. CITIM ROLUL DIN TABELUL NOU 'ROLURI'
+        cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
+        rol_row = cur.fetchone()
 
-        # Răspuns de succes care include TOKEN-ul
+        # Fallback: Dacă nu are rol în tabelul nou, luăm din tabelul vechi (dar ar trebui să aibă)
+        if rol_row:
+            user_role = rol_row['rol']
+        else:
+            # Backup
+            cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
+            user_role = cur.fetchone()['rol']
+
+        # 3. CITIM COPIII DIN TABELUL NOU 'COPII' (Doar dacă e părinte)
+        lista_copii = []
+        if user_role == 'Parinte':
+            cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
+            rows_copii = cur.fetchall()
+            for c in rows_copii:
+                lista_copii.append({
+                    "nume": c['nume'],
+                    "grupa": c['grupa_text'],
+                    "varsta": str(c['data_nasterii']) if c['data_nasterii'] else ""
+                })
+
+        # 4. Generăm Token
+        token = jwt.encode({
+            'user_id': user_id,
+            'username': username_real,
+            'rol': user_role,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+        }, SECRET_KEY, algorithm="HS256")
+
         return jsonify({
             "status": "success",
-            "token": token,  # <--- Token-ul generat
-            "user": user["username"],
-            "email": user["email"],
-            "rol": user["rol"],
-            "grupe": user["grupe"],
+            "token": token,
+            "username": username_real,
+            "email": user['email'],
+            "rol": user_role,
+            "nume_complet": user['nume_complet'],
+            "is_placeholder": bool(user['is_placeholder']),
+            "copii": lista_copii  # Trimitem lista proaspătă din SQL
         }), 200
 
     except Exception as e:
-        # pentru debug poți loga `e` în server
-        print(f"Eroare login: {e}")
-        return jsonify({
-            "status": "error",
-            "message": "Eroare internă la autentificare."
-        }), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()

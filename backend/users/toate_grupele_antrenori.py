@@ -1,65 +1,21 @@
 import json
-import re
-import uuid
-from datetime import datetime  # <--- Import datetime
+from datetime import datetime
 from flask import Blueprint, jsonify
-
 from ..accounts.decorators import token_required, admin_required
 from ..config import get_conn
 
 toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
 
 
-def normalize_grupa(value):
-    if value is None: return None
-    s = str(value).strip()
-    m = re.match(r'^\s*(?:grupa\s*)?(\d+)\s*$', s, re.IGNORECASE)
-    return f"Grupa {m.group(1)}" if m else s
-
-
-def _safe_load_children(raw):
-    try:
-        v = json.loads(raw or "[]")
-        return v if isinstance(v, list) else []
-    except Exception:
-        return []
-
-
-def _group_sort_key(name: str):
-    m = re.search(r"(\d+)", name or "")
-    return int(m.group(1)) if m else 9999
-
-
 def _calculate_age(dob):
-    """Calculează vârsta pe baza datei de naștere."""
     if not dob: return 0
-    try:
-        if isinstance(dob, str):
-            birth_date = datetime.strptime(dob, "%Y-%m-%d")
-        else:
-            birth_date = dob
-        today = datetime.now()
-        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-        return age
-    except Exception:
-        return 0
-
-
-def ensure_child_ids_and_normalize(children):
-    changed = False
-    for c in children:
-        if "id" not in c or not c["id"]:
-            c["id"] = uuid.uuid4().hex
-            changed = True
-        if "varsta" in c and isinstance(c["varsta"], str) and c["varsta"].isdigit():
-            c["varsta"] = int(c["varsta"])
-            changed = True
-        if "grupa" in c:
-            ng = normalize_grupa(c["grupa"])
-            if ng != c["grupa"]:
-                c["grupa"] = ng
-                changed = True
-    return changed, children
+    if isinstance(dob, str):
+        try:
+            dob = datetime.strptime(dob, "%Y-%m-%d")
+        except:
+            return 0
+    today = datetime.now()
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
 @toate_grupele_antrenori_bp.get("/api/toate_grupele_antrenori")
@@ -67,105 +23,87 @@ def ensure_child_ids_and_normalize(children):
 @admin_required
 def toate_grupele_antrenori():
     con = get_conn()
+    cur = con.cursor()
 
-    # 1. AUTO-REPAIR Părinți
-    try:
-        users_with_kids = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
-        for u in users_with_kids:
-            children = _safe_load_children(u["copii"])
-            if not children: continue
-            was_changed, fixed_children = ensure_child_ids_and_normalize(children)
-            if was_changed:
-                con.execute("UPDATE utilizatori SET copii = %s WHERE id = %s",
-                            (json.dumps(fixed_children, ensure_ascii=False), u["id"]))
-                con.commit()
-    except Exception as e:
-        pass
-
-    # 2. Antrenorii
-    trainers = con.execute("""
-            SELECT id, username, COALESCE(nume_complet, username) AS display_name, grupe 
-            FROM utilizatori 
-            WHERE LOWER(rol) = 'antrenor' 
-               OR (LOWER(rol) = 'admin' AND grupe IS NOT NULL AND length(grupe) > 0)
-        """).fetchall()
-
-    # 3. Părinții
-    parents = con.execute("""
-        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, copii
-        FROM utilizatori
-        WHERE LOWER(rol) IN ('parinte', 'admin')
-    """).fetchall()
-
-    # 4. Sportivii Independenți
-    # MODIFICARE: Selectăm 'data_nasterii' în loc de 'varsta'
-    sportivi = con.execute("""
-        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, grupe, data_nasterii
-        FROM utilizatori
-        WHERE LOWER(rol) = 'sportiv'
-    """).fetchall()
+    # 1. Luăm toți antrenorii care au grupe alocate
+    cur.execute("""
+        SELECT DISTINCT u.id, u.username, u.nume_complet
+        FROM utilizatori u
+        JOIN grupe g ON u.id = g.id_antrenor
+        WHERE u.rol IN ('Antrenor', 'Admin')
+    """)
+    trainers = cur.fetchall()
 
     out = []
 
     for tr in trainers:
-        groups_raw = [g.strip() for g in (tr["grupe"] or "").split(",") if g.strip()]
-        groups = [normalize_grupa(g) for g in groups_raw]
-        groups = [g for g in groups if g]
-        groups_map = {g: [] for g in groups}
+        tid = tr['id']
+        tname = tr['username']
+        tdisplay = tr['nume_complet'] or tname
 
-        # A. Adăugăm copiii părinților
-        for p in parents:
-            kids = _safe_load_children(p["copii"])
-            for c in kids:
-                g = normalize_grupa(c.get("grupa"))
-                if g in groups_map:
-                    groups_map[g].append({
-                        "id": c.get("id"),
-                        "nume": c.get("nume"),
-                        "varsta": c.get("varsta"),
-                        "gen": c.get("gen"),
-                        "grupa": g,
-                        "_parent": {
-                            "username": p["username"],
-                            "email": p["email"],
-                            "display": p["display_name"]
-                        }
-                    })
+        # 2. Luăm grupele acestui antrenor
+        cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s ORDER BY nume", (tid,))
+        grupe = cur.fetchall()
 
-        # B. Adăugăm sportivii independenți
-        for s in sportivi:
-            g_raw = s["grupe"]
-            if not g_raw: continue
-            s_groups = [normalize_grupa(x) for x in g_raw.split(",")]
+        grupe_list = []
 
-            # Calcul vârstă
-            varsta_reala = _calculate_age(s["data_nasterii"])
+        for g in grupe:
+            gid = g['id']
+            gnume = g['nume']
 
-            for g_s in s_groups:
-                if g_s in groups_map:
-                    groups_map[g_s].append({
-                        "id": str(s["id"]),
-                        "nume": s["display_name"],
-                        "varsta": varsta_reala,  # Vârsta calculată
-                        "gen": "—",
-                        "grupa": g_s,
-                        "_parent": {
-                            "username": s["username"],
-                            "email": s["email"],
-                            "display": f"{s['display_name']} (Sportiv)"
-                        }
-                    })
+            # 3. Luăm Sportivii din grupă (Copii + Adulți) folosind UNION
+            # Această interogare combină cele două tipuri de sportivi într-o singură listă
+            cur.execute("""
+                SELECT c.id, c.nume, c.data_nasterii, c.gen, 'copil' as tip,
+                       u.username as p_user, u.nume_complet as p_full, u.email as p_email
+                FROM sportivi_pe_grupe sg
+                JOIN copii c ON sg.id_sportiv_copil = c.id
+                JOIN utilizatori u ON c.id_parinte = u.id
+                WHERE sg.id_grupa = %s
 
-        grupe_list = [
-            {"grupa": g, "copii": sorted(groups_map[g], key=lambda k: (str(k.get("nume") or "").lower()))}
-            for g in sorted(groups_map.keys(), key=_group_sort_key)
-        ]
+                UNION ALL
+
+                SELECT CAST(u.id AS TEXT), COALESCE(u.nume_complet, u.username), u.data_nasterii, u.gen, 'sportiv' as tip,
+                       u.username, u.nume_complet, u.email
+                FROM sportivi_pe_grupe sg
+                JOIN utilizatori u ON sg.id_sportiv_user = u.id
+                WHERE sg.id_grupa = %s
+            """, (gid, gid))
+
+            members = cur.fetchall()
+
+            copii_formatted = []
+            for m in members:
+                is_sportiv = (m['tip'] == 'sportiv')
+                p_display = m['p_full'] or m['p_user']
+
+                copii_formatted.append({
+                    "id": m['id'],
+                    "nume": m['nume'],
+                    "varsta": _calculate_age(m['data_nasterii']),
+                    "gen": m['gen'] or "—",
+                    "grupa": gnume,
+                    "_parent": {
+                        "username": m['p_user'],
+                        "display": f"{p_display} (Sportiv)" if is_sportiv else p_display,
+                        "email": m['p_email']
+                    }
+                })
+
+            # Sortare alfabetică după nume
+            copii_formatted.sort(key=lambda k: (k['nume'] or "").lower())
+
+            grupe_list.append({
+                "grupa": gnume,
+                "copii": copii_formatted
+            })
 
         out.append({
-            "antrenor": tr["username"],
-            "antrenor_display": tr["display_name"],
+            "antrenor": tname,
+            "antrenor_display": tdisplay,
             "grupe": grupe_list
         })
 
-    out.sort(key=lambda r: (r.get("antrenor_display") or r.get("antrenor") or "").lower())
+    # Sortare antrenori
+    out.sort(key=lambda r: (r.get("antrenor_display") or "").lower())
     return jsonify({"status": "success", "data": out}), 200

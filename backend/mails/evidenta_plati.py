@@ -1,107 +1,69 @@
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
-import json as _json
 
 evidenta_plati_bp = Blueprint("evidenta_plati", __name__)
 
-# --- helpers --------------------------------------------------------------
-
-# def ensure_tables():
-#     """Creează tabela plati dacă nu există."""
-#     con = get_conn()
-#     con.execute("""
-#         CREATE TABLE IF NOT EXISTS plati (
-#             id SERIAL PRIMARY KEY AUTOINCREMENT,
-#             parinte_id SERIAL NOT NULL,
-#             copil_nume TEXT NOT NULL,
-#             luna TEXT,
-#             suma REAL,
-#             tip_plata TEXT,
-#             status TEXT,
-#             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-#         )
-#     """)
-#     con.commit()
-
-def _safe_load_children(copii_json):
-    if not copii_json:
-        return []
-    try:
-        return _json.loads(copii_json)
-    except Exception:
-        return []
 
 def get_parinte_id_by_copil(copil_nume: str):
-    """Mapează numele copilului (case-insensitive) -> parinte_id."""
-    if not copil_nume:
-        return None
-    target = copil_nume.strip().upper()
-
+    """Găsește ID-ul părintelui căutând copilul în tabelul 'copii'."""
+    if not copil_nume: return None
+    target = copil_nume.strip().lower()
     con = get_conn()
-    rows = con.execute("SELECT id, copii FROM utilizatori WHERE LOWER(rol) = 'parinte'").fetchall()
-    for r in rows:
-        for copil in _safe_load_children(r["copii"]):
-            if (copil.get("nume") or "").strip().upper() == target:
-                return r["id"]
-    return None
+    cur = con.cursor()
+    # Căutare rapidă SQL
+    cur.execute("SELECT id_parinte FROM copii WHERE LOWER(nume) = %s LIMIT 1", (target,))
+    row = cur.fetchone()
+    return row['id_parinte'] if row else None
 
-# --- routes ---------------------------------------------------------------
 
 @evidenta_plati_bp.get("/api/plati/filtrate")
 def get_plati_filtrate():
-    """
-    Combina:
-      - toate plățile existente (join cu numele părintelui),
-      - cu „copiii fără plăți” (marcați 'status': 'neplatit').
-    Include:
-      - parinte_nume    -> username
-      - parinte_display -> COALESCE(nume_complet, username)
-    """
     try:
-       # ensure_tables()
         con = get_conn()
+        cur = con.cursor()
 
-        # Plăți existente (cu username și nume de afișat)
-        rows = con.execute("""
-            SELECT
-              p.*,
-              u.username AS parinte_nume,
-              COALESCE(u.nume_complet, u.username) AS parinte_display
+        # 1. Luăm toate plățile înregistrate
+        cur.execute("""
+            SELECT p.*, u.username AS parinte_nume, COALESCE(u.nume_complet, u.username) AS parinte_display
             FROM plati p
             JOIN utilizatori u ON u.id = p.parinte_id
             ORDER BY p.id DESC
-        """).fetchall()
-        plati_existente = [dict(r) for r in rows]
+        """)
+        plati_existente = [dict(r) for r in cur.fetchall()]
 
-        # Părinți + copiii lor (pentru a completa rândurile 'neplătit')
-        parinti = con.execute("""
-            SELECT username,
-                   COALESCE(nume_complet, username) AS parinte_display,
-                   copii
-            FROM utilizatori
-            WHERE LOWER(rol) = 'parinte' AND copii IS NOT NULL
-        """).fetchall()
+        # 2. Găsim copiii care NU au plăți (pentru a-i afișa cu roșu/neplătit)
+        # Comparăm numele copilului din tabelul 'copii' cu numele din tabelul 'plati'
+
+        # Luăm toți copiii din sistem
+        cur.execute("""
+            SELECT c.nume, u.username, COALESCE(u.nume_complet, u.username) as parinte_display
+            FROM copii c
+            JOIN utilizatori u ON c.id_parinte = u.id
+        """)
+        toti_copiii = cur.fetchall()
 
         copii_neplatiti = []
-        for p in parinti:
-            username = p["username"]
-            disp = p["parinte_display"]
-            for copil in _safe_load_children(p["copii"]):
-                copil_nume = (copil.get("nume") or "").strip()
-                if not copil_nume:
-                    continue
-                # dacă NU există vreo plată pentru acest copil (indiferent de lună)
-                if not any((pe.get("copil_nume") or "").strip().upper() == copil_nume.upper()
-                           for pe in plati_existente):
-                    copii_neplatiti.append({
-                        "copil_nume": copil_nume,
-                        "parinte_nume": username,
-                        "parinte_display": disp,
-                        "luna": None,
-                        "suma": None,
-                        "tip_plata": None,
-                        "status": "neplatit"
-                    })
+        for copil in toti_copiii:
+            c_nume = (copil['nume'] or "").strip()
+            if not c_nume: continue
+
+            # Verificăm dacă există vreo plată pe acest nume
+            # (Aici logica e simplistă pe nume, cum era înainte. Ideal ar fi pe ID, dar tabela plati nu are ID copil)
+            has_payment = any(
+                (p.get("copil_nume") or "").strip().lower() == c_nume.lower()
+                for p in plati_existente
+            )
+
+            if not has_payment:
+                copii_neplatiti.append({
+                    "copil_nume": c_nume,
+                    "parinte_nume": copil['username'],
+                    "parinte_display": copil['parinte_display'],
+                    "luna": None,
+                    "suma": None,
+                    "tip_plata": None,
+                    "status": "neplatit"
+                })
 
         return jsonify(plati_existente + copii_neplatiti)
 
@@ -112,18 +74,15 @@ def get_plati_filtrate():
 @evidenta_plati_bp.get("/api/plati")
 def get_plati():
     try:
-        #ensure_tables()
         con = get_conn()
-        rows = con.execute("""
-            SELECT
-              p.*,
-              u.username AS parinte_nume,
-              COALESCE(u.nume_complet, u.username) AS parinte_display
+        cur = con.cursor()
+        cur.execute("""
+            SELECT p.*, u.username AS parinte_nume, COALESCE(u.nume_complet, u.username) AS parinte_display
             FROM plati p
             JOIN utilizatori u ON u.id = p.parinte_id
             ORDER BY p.id DESC
-        """).fetchall()
-        return jsonify([dict(r) for r in rows])
+        """)
+        return jsonify([dict(r) for r in cur.fetchall()])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -142,27 +101,25 @@ def add_plata():
 
     parinte_id = get_parinte_id_by_copil(copil_nume)
     if not parinte_id:
-        return jsonify({"error": "Parinte necunoscut pentru copilul dat"}), 400
+        return jsonify({"error": "Nu am putut identifica părintele acestui copil."}), 400
 
     try:
-        #ensure_tables()
         con = get_conn()
+        cur = con.cursor()
 
-        # Dacă există deja o plată pentru același copil + lună -> UPDATE
-        existing = con.execute("""
+        # Update sau Insert
+        cur.execute("""
             SELECT id FROM plati
             WHERE UPPER(copil_nume) = UPPER(%s) AND LOWER(luna) = LOWER(%s)
-            LIMIT 1
-        """, (copil_nume, luna)).fetchone()
+        """, (copil_nume, luna))
+        existing = cur.fetchone()
 
         if existing:
-            con.execute("""
-                UPDATE plati
-                   SET suma = %s, tip_plata = %s, status = %s, parinte_id = %s
-                 WHERE id = %s
+            cur.execute("""
+                UPDATE plati SET suma=%s, tip_plata=%s, status=%s, parinte_id=%s WHERE id=%s
             """, (suma, tip_plata, status, parinte_id, existing["id"]))
         else:
-            con.execute("""
+            cur.execute("""
                 INSERT INTO plati (parinte_id, copil_nume, luna, suma, tip_plata, status)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (parinte_id, copil_nume, luna, suma, tip_plata, status))
@@ -176,47 +133,29 @@ def add_plata():
 
 @evidenta_plati_bp.put("/api/plati/<int:id>")
 def update_plata(id):
-    # dacă vine -1 din UI, tratăm ca create
     data = request.get_json(silent=True) or {}
-
     try:
-        #ensure_tables()
         con = get_conn()
+        cur = con.cursor()
 
-        exista = con.execute("SELECT id FROM plati WHERE id = %s", (id,)).fetchone()
-
-        if exista:
-            con.execute("""
-                UPDATE plati
-                   SET copil_nume = %s, luna = %s, suma = %s, tip_plata = %s, status = %s
-                 WHERE id = %s
-            """, (
-                data.get("copil_nume"),
-                data.get("luna"),
-                data.get("suma"),
-                data.get("tip_plata"),
-                data.get("status"),
-                id
-            ))
+        cur.execute("SELECT id FROM plati WHERE id = %s", (id,))
+        if cur.fetchone():
+            cur.execute("""
+                UPDATE plati SET copil_nume=%s, luna=%s, suma=%s, tip_plata=%s, status=%s WHERE id=%s
+            """, (data.get("copil_nume"), data.get("luna"), data.get("suma"),
+                  data.get("tip_plata"), data.get("status"), id))
         else:
+            # Fallback create
             parinte_id = get_parinte_id_by_copil(data.get("copil_nume"))
-            if not parinte_id:
-                return jsonify({"error": "Parinte necunoscut pentru copilul dat"}), 400
-            con.execute("""
+            if not parinte_id: return jsonify({"error": "Parinte necunoscut"}), 400
+            cur.execute("""
                 INSERT INTO plati (parinte_id, copil_nume, luna, suma, tip_plata, status)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                parinte_id,
-                data.get("copil_nume"),
-                data.get("luna"),
-                data.get("suma"),
-                data.get("tip_plata"),
-                data.get("status")
-            ))
+            """, (parinte_id, data.get("copil_nume"), data.get("luna"), data.get("suma"),
+                  data.get("tip_plata"), data.get("status")))
 
         con.commit()
         return jsonify({"message": "OK"}), 200
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -224,7 +163,6 @@ def update_plata(id):
 @evidenta_plati_bp.delete("/api/plati/<int:id>")
 def delete_plata(id):
     try:
-       # ensure_tables()
         con = get_conn()
         con.execute("DELETE FROM plati WHERE id = %s", (id,))
         con.commit()

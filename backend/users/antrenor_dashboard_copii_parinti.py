@@ -1,60 +1,21 @@
-import re
-import uuid
 import json
 from datetime import datetime
 from flask import request, jsonify, Blueprint
-
 from ..accounts.decorators import token_required
 from ..config import get_conn
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
 
 
-def _normalize_grupa(value):
-    if value is None:
-        return None
-    s = str(value).strip()
-    m = re.match(r'^\s*(?:grupa\s*)?(\d+)\s*$', s, re.IGNORECASE)
-    return f"Grupa {m.group(1)}" if m else s
-
-
-def _safe_load_children(copii_json):
-    try:
-        v = json.loads(copii_json or "[]")
-        return v if isinstance(v, list) else []
-    except Exception:
-        return []
-
-
 def _calculate_age(dob):
-    if not dob:
-        return 0
-    try:
-        if isinstance(dob, str):
-            birth_date = datetime.strptime(dob, "%Y-%m-%d")
-        else:
-            birth_date = dob
-        today = datetime.now()
-        return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    except Exception:
-        return 0
-
-
-def ensure_child_ids_and_normalize(children):
-    changed = False
-    for c in children:
-        if "id" not in c or not c["id"]:
-            c["id"] = uuid.uuid4().hex
-            changed = True
-        if "varsta" in c and isinstance(c["varsta"], str) and c["varsta"].isdigit():
-            c["varsta"] = int(c["varsta"])
-            changed = True
-        if "grupa" in c:
-            ng = _normalize_grupa(c["grupa"])
-            if ng != c["grupa"]:
-                c["grupa"] = ng
-                changed = True
-    return changed, children
+    if not dob: return 0
+    if isinstance(dob, str):
+        try:
+            dob = datetime.strptime(dob, "%Y-%m-%d")
+        except:
+            return 0
+    today = datetime.now()
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
@@ -67,141 +28,171 @@ def antrenor_dashboard_data():
 
     con = get_conn()
     try:
-        # 1. Aflăm grupele antrenorului
-        tr = con.execute("""
-            SELECT grupe FROM utilizatori 
-            WHERE (LOWER(rol)='antrenor' OR LOWER(rol)='admin') 
-              AND username = %s
-        """, (trainer_username,)).fetchone()
+        cur = con.cursor()
 
-        if not tr:
+        # 1. Găsim ID-ul antrenorului
+        cur.execute("SELECT id, rol FROM utilizatori WHERE username = %s", (trainer_username,))
+        trainer_row = cur.fetchone()
+        if not trainer_row:
             return jsonify({"status": "success", "date": []}), 200
 
-        allowed = set()
-        for raw in (tr["grupe"] or "").split(","):
-            ng = _normalize_grupa(raw)
-            if ng:
-                allowed.add(ng)
+        trainer_id = trainer_row['id']
+        trainer_rol = trainer_row['rol'].lower()
 
-        if not allowed:
+        # 2. Găsim grupele gestionate de acest antrenor
+        # Dacă e ADMIN, le vede pe toate. Dacă e ANTRENOR, doar pe ale lui.
+        if trainer_rol == 'admin':
+            cur.execute("SELECT id, nume FROM grupe ORDER BY nume ASC")
+        else:
+            cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s ORDER BY nume ASC", (trainer_id,))
+
+        grupe_rows = cur.fetchall()
+
+        if not grupe_rows:
             return jsonify({"status": "success", "date": []}), 200
 
-        results = [{"grupa": g, "parinte": None, "copii": []} for g in allowed]
+        results = []
 
-        # --- A. Procesăm PĂRINȚII și copiii lor ---
-        parents = con.execute("""
-            SELECT id, username, email, copii, COALESCE(nume_complet, username) AS display_name
-            FROM utilizatori
-            WHERE LOWER(rol) IN ('parinte', 'admin') AND copii IS NOT NULL
-        """).fetchall()
+        # 3. Pentru fiecare grupă, luăm sportivii (copii + adulți)
+        for gr in grupe_rows:
+            g_id = gr['id']
+            g_nume = gr['nume']
 
-        for r in parents:
-            children = _safe_load_children(r["copii"])
-            if not children: continue
+            # A. COPII
+            cur.execute("""
+                SELECT c.id, c.nume, c.data_nasterii, c.gen,
+                       u.id as pid, u.username as puser, u.nume_complet as pfull, u.email as pemail
+                FROM sportivi_pe_grupe sg
+                JOIN copii c ON sg.id_sportiv_copil = c.id
+                JOIN utilizatori u ON c.id_parinte = u.id
+                WHERE sg.id_grupa = %s
+            """, (g_id,))
+            kids_rows = cur.fetchall()
 
-            was_changed, fixed_children = ensure_child_ids_and_normalize(children)
-            if was_changed:
-                con.execute("UPDATE utilizatori SET copii = %s WHERE id = %s",
-                            (json.dumps(fixed_children, ensure_ascii=False), r["id"]))
-                con.commit()
-                children = fixed_children
+            # B. SPORTIVI ADULȚI
+            cur.execute("""
+                SELECT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen, u.email
+                FROM sportivi_pe_grupe sg
+                JOIN utilizatori u ON sg.id_sportiv_user = u.id
+                WHERE sg.id_grupa = %s
+            """, (g_id,))
+            adults_rows = cur.fetchall()
 
-            by_group = {}
-            for c in children:
-                g = _normalize_grupa(c.get("grupa"))
-                if g in allowed:
-                    by_group.setdefault(g, []).append({
-                        "id": c.get("id"),
-                        "nume": c.get("nume"),
-                        "varsta": c.get("varsta"),
-                        "gen": c.get("gen"),
-                        "grupa": g,
-                    })
+            # Procesăm lista combinată
+            lista_copii = []
 
-            for gname, kids in by_group.items():
-                results.append({
-                    "grupa": gname,
-                    "parinte": {
-                        "id": r["id"],
-                        "username": r["username"],
-                        "email": r["email"],
-                        "display": r["display_name"],
-                    },
-                    "copii": kids
+            # Adăugăm Copiii
+            for k in kids_rows:
+                lista_copii.append({
+                    "id": k['id'],  # UUID string
+                    "nume": k['nume'],
+                    "varsta": _calculate_age(k['data_nasterii']),
+                    "gen": k['gen'] or "—",
+                    "grupa": g_nume,
+                    "tip": "copil",
+                    "_parinte_info": {
+                        "id": k['pid'],
+                        "display": k['pfull'] or k['puser'],
+                        "email": k['pemail']
+                    }
                 })
 
-        # --- B. Procesăm SPORTIVII INDEPENDENȚI (ACUM E ÎN AFARA BUCLEI DE PĂRINȚI) ---
-        sportivi = con.execute("""
-            SELECT id, username, email, nume_complet, grupe, data_nasterii, gen
-            FROM utilizatori
-            WHERE LOWER(rol) = 'sportiv'
-        """).fetchall()
-
-        for s in sportivi:
-            g_raw = s["grupe"]
-            if not g_raw: continue
-
-            varsta_reala = _calculate_age(s["data_nasterii"])
-            gen_real = s["gen"] if s["gen"] else "—"
-
-            sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
-
-            for g_s in sportiv_groups:
-                if g_s in allowed:
-                    display_name = s["nume_complet"] or s["username"]
-
-                    virtual_child = {
-                        "id": str(s["id"]),
-                        "nume": display_name,
-                        "varsta": varsta_reala,
-                        "gen": gen_real,
-                        "grupa": g_s
+            # Adăugăm Adulții
+            for a in adults_rows:
+                display_name = a['nume_complet'] or a['username']
+                lista_copii.append({
+                    "id": str(a['id']),  # ID numeric convertit la string
+                    "nume": display_name,
+                    "varsta": _calculate_age(a['data_nasterii']),
+                    "gen": a['gen'] or "—",
+                    "grupa": g_nume,
+                    "tip": "sportiv",
+                    "_parinte_info": {
+                        "id": a['id'],
+                        "display": f"{display_name} (Sportiv)",
+                        "email": a['email']
                     }
+                })
 
-                    results.append({
-                        "grupa": g_s,
+            # Grupăm după "Părinte" pentru afișare (Așa cere frontend-ul vechi)
+            # Frontend-ul se așteaptă la {grupa: "X", parinte: {...}, copii: [...]}
+            # Trebuie să regrupăm lista plată de mai sus.
+
+            # Mapare: ParinteID -> {info_parinte, lista_copii}
+            map_familii = {}
+
+            for elev in lista_copii:
+                pid = elev["_parinte_info"]["id"]
+                if pid not in map_familii:
+                    map_familii[pid] = {
                         "parinte": {
-                            "id": s["id"],
-                            "username": s["username"],
-                            "email": s["email"],
-                            "display": f"{display_name} (Sportiv)"
+                            "id": pid,
+                            "display": elev["_parinte_info"]["display"],
+                            "email": elev["_parinte_info"]["email"],
+                            "username": "..."
                         },
-                        "copii": [virtual_child]
-                    })
+                        "copii": []
+                    }
+                # Curățăm obiectul elev de cheia _parinte_info ca să nu o trimitem dublu
+                clean_elev = {k: v for k, v in elev.items() if k != "_parinte_info"}
+                map_familii[pid]["copii"].append(clean_elev)
 
-        # Sortare
-        def group_key(name: str):
+            # Construim rezultatul final pentru această grupă
+            for pid, val in map_familii.items():
+                results.append({
+                    "grupa": g_nume,
+                    "parinte": val["parinte"],
+                    "copii": val["copii"]
+                })
+
+        # Sortare finală
+        def group_key(item):
             import re
+            name = item['grupa']
             m = re.search(r"(\d+)", name or "")
             return (int(m.group(1)) if m else 9999, (name or "").lower())
 
-        results.sort(key=lambda x: (group_key(x["grupa"]), (x["parinte"] or {}).get("display", "")))
+        results.sort(key=lambda x: (group_key(x), x['parinte']['display']))
 
         return jsonify({"status": "success", "date": results}), 200
 
     except Exception as e:
+        print(f"Eroare SQL Dashboard: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# Endpoint auxiliar pentru părinți (rămâne compatibil)
 @antrenor_dashboard_copii_parinti_bp.route("/api/copiii_mei", methods=["POST"])
 @token_required
 def copiii_mei():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
     if not username: return jsonify({"status": "error"}), 400
+
+    con = get_conn()
     try:
-        con = get_conn()
         cur = con.cursor()
-        cur.execute("SELECT id, copii FROM utilizatori WHERE username=%s AND LOWER(rol) IN ('parinte', 'admin')",
-                    (username,))
-        row = cur.fetchone()
-        if not row: return jsonify({"status": "error"}), 404
-        copii = _safe_load_children(row["copii"])
-        changed, copii = ensure_child_ids_and_normalize(copii)
-        if changed:
-            cur.execute("UPDATE utilizatori SET copii=%s WHERE id=%s",
-                        (json.dumps(copii, ensure_ascii=False), row["id"]))
-            con.commit()
-        return jsonify({"status": "success", "copii": copii})
+        # Luăm ID părinte
+        cur.execute("SELECT id FROM utilizatori WHERE username = %s", (username,))
+        p_row = cur.fetchone()
+        if not p_row: return jsonify({"status": "error", "message": "User not found"}), 404
+
+        pid = p_row['id']
+
+        # Luăm copiii din tabelul COPII
+        cur.execute("SELECT id, nume, data_nasterii, gen, grupa_text FROM copii WHERE id_parinte = %s", (pid,))
+        rows = cur.fetchall()
+
+        copii_list = []
+        for r in rows:
+            copii_list.append({
+                "id": r['id'],
+                "nume": r['nume'],
+                "varsta": _calculate_age(r['data_nasterii']),
+                "gen": r['gen'],
+                "grupa": r['grupa_text']  # Sau facem JOIN cu grupe dacă vrem numele oficial
+            })
+
+        return jsonify({"status": "success", "copii": copii_list})
     except Exception as e:
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
