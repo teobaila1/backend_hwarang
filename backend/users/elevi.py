@@ -98,21 +98,25 @@ def add_student():
 
         elif parinte_nume:
             # B. Părinte nou (Placeholder)
+            # Verificăm unicitatea
             check = con.execute("SELECT id FROM utilizatori WHERE LOWER(username) = LOWER(%s)",
                                 (parinte_nume,)).fetchone()
             if check:
                 return jsonify({"status": "error",
                                 "message": "Există deja un părinte cu acest nume. Selectează-l din listă."}), 409
 
+            # Generăm cod de revendicare
             claim_code = uuid.uuid4().hex[:8].upper()
+            # Email dummy pentru a nu crăpa la constrângerea UNIQUE (dacă există)
             dummy_email = f"placeholder_{claim_code}@hwarang.temp"
 
+            # --- AICI ESTE MODIFICAREA: IMPUNEM ROLUL 'Parinte' ---
             cur = con.execute("""
                 INSERT INTO utilizatori (
                     username, 
                     email,
                     parola, 
-                    rol,
+                    rol,               -- Coloana rol
                     is_placeholder, 
                     claim_code, 
                     copii, 
@@ -133,6 +137,7 @@ def add_student():
             return jsonify(
                 {"status": "error", "message": "Trebuie să selectezi un părinte sau să introduci un nume nou."}), 400
 
+        # C. Adăugăm copilul
         new_child = {
             "id": uuid.uuid4().hex,
             "nume": nume_elev,
@@ -142,6 +147,7 @@ def add_student():
         }
         copii_list.append(new_child)
 
+        # D. Salvăm
         con.execute(
             "UPDATE utilizatori SET copii = %s WHERE id = %s",
             (json.dumps(copii_list, ensure_ascii=False), target_parent_id)
@@ -156,57 +162,14 @@ def add_student():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 3. PATCH: Modifică un elev existent (Sau un SPORTIV) ---
+# --- 3. PATCH: Modifică un elev existent (și numele părintelui) ---
 @elevi_bp.patch("/api/elevi/<string:elev_id>")
 @token_required
 def update_student(elev_id):
     data = request.get_json(silent=True) or {}
+
     con = get_conn()
-
     try:
-        # === CAZUL A: SPORTIV ADULT (ID Numeric) ===
-        # Dashboard-ul trimite ID-ul numeric convertit în string pentru sportivi.
-        if elev_id.isdigit():
-            user_id = int(elev_id)
-
-            # Pregătim câmpurile de actualizat pentru tabelul `utilizatori`
-            updates = []
-            values = []
-
-            # Mapăm câmpurile din frontend la coloanele din DB
-            if "nume" in data:
-                updates.append("nume_complet = %s")
-                values.append(_normalize(data["nume"]))
-
-            if "grupa" in data:
-                # La sportivi coloana este 'grupe'
-                updates.append("grupe = %s")
-                values.append(_normalize(data["grupa"]))
-
-            if "gen" in data:
-                # Ne asigurăm că există coloana 'gen' (ar trebui adăugată dacă nu există)
-                updates.append("gen = %s")
-                values.append(data["gen"])
-
-            # NOTĂ: 'varsta' nu o actualizăm direct în tabelul utilizatori,
-            # deoarece ea se calculează din 'data_nasterii'.
-
-            if updates:
-                values.append(user_id)
-                sql = f"UPDATE utilizatori SET {', '.join(updates)} WHERE id = %s"
-
-                res = con.execute(sql, tuple(values))
-                # Verificăm dacă s-a actualizat ceva
-                if res.rowcount == 0:
-                    # Poate ID-ul nu există
-                    return jsonify({"status": "error", "message": "Sportivul nu a fost găsit."}), 404
-
-                con.commit()
-                return jsonify({"status": "success", "message": "Sportiv actualizat."}), 200
-            else:
-                return jsonify({"status": "success", "message": "Nimic de actualizat."}), 200
-
-        # === CAZUL B: COPIL (ID UUID) - Logica veche ===
         rows = con.execute(
             "SELECT id, copii, is_placeholder, username, nume_complet FROM utilizatori WHERE copii IS NOT NULL").fetchall()
 
@@ -214,7 +177,7 @@ def update_student(elev_id):
         copii_list = []
         child_found = False
 
-        # 1. Găsim copilul în JSON-urile părinților
+        # 1. Găsim copilul
         for r in rows:
             c_list = _safe_load_list(r["copii"])
             for i, child in enumerate(c_list):
@@ -238,7 +201,7 @@ def update_student(elev_id):
 
         parent_id = parent_found_row["id"]
 
-        # 2. Actualizăm Numele Părintelui (doar dacă a fost trimis și e copil)
+        # 2. Actualizăm Numele Părintelui
         nume_parinte_nou = _normalize(data.get("parinte_nume") or data.get("parent_display"))
 
         if nume_parinte_nou:
@@ -246,7 +209,9 @@ def update_student(elev_id):
 
             if nume_parinte_nou.lower() != nume_vechi.lower():
                 is_placeholder = parent_found_row["is_placeholder"]
+
                 if is_placeholder == 1:
+                    # Dacă e placeholder, putem schimba username-ul
                     try:
                         con.execute(
                             "UPDATE utilizatori SET username = %s, nume_complet = %s WHERE id = %s",
@@ -258,12 +223,13 @@ def update_student(elev_id):
                             (nume_parinte_nou, parent_id)
                         )
                 else:
+                    # Dacă e cont real, schimbăm doar numele de afișare
                     con.execute(
                         "UPDATE utilizatori SET nume_complet = %s WHERE id = %s",
                         (nume_parinte_nou, parent_id)
                     )
 
-        # 3. Salvăm lista de copii actualizată
+        # 3. Salvăm
         con.execute(
             "UPDATE utilizatori SET copii = %s WHERE id = %s",
             (json.dumps(copii_list, ensure_ascii=False), parent_id)
@@ -284,16 +250,6 @@ def update_student(elev_id):
 def delete_student(elev_id):
     con = get_conn()
     try:
-        # === CAZUL A: ȘTERGERE SPORTIV (Dacă ID e numeric) ===
-        # De regulă nu ștergem useri complet de aici, dar dacă vrei funcționalitatea:
-        if elev_id.isdigit():
-            # Putem restricționa ștergerea userilor reali de aici pentru siguranță
-            # sau putem implementa un soft delete. Momentan returnăm eroare sau permitem.
-            # Pentru siguranță, nu ștergem conturi de utilizator (sportivi) prin acest buton simplu de "șterge elev".
-            return jsonify({"status": "error",
-                            "message": "Conturile de sportivi nu pot fi șterse de aici. Folosiți secțiunea Utilizatori."}), 400
-
-        # === CAZUL B: ȘTERGERE COPIL ===
         rows = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
 
         parent_found = None
@@ -352,6 +308,7 @@ def sugestii_inscriere():
                         copii.append({"nume": c.get("nume"), "grupa": c.get("grupa")})
 
         elif rol == 'sportiv':
+            # Dacă e sportiv, se înscrie pe el însuși
             pass
 
         return jsonify({"status": "success", "data": {"rol": rol, "nume_propriu": nume, "copii": copii}})
