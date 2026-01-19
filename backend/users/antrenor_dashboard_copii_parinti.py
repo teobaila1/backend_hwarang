@@ -1,7 +1,7 @@
 import re
 import uuid
 import json
-from datetime import datetime  # <--- Import necesar pentru calcul vârstă
+from datetime import datetime
 from flask import request, jsonify, Blueprint
 
 from ..accounts.decorators import token_required
@@ -27,19 +27,15 @@ def _safe_load_children(copii_json):
 
 
 def _calculate_age(dob):
-    """Calculează vârsta pe baza datei de naștere."""
     if not dob:
         return 0
     try:
-        # Dacă dob e string, convertim. Dacă e deja date object, folosim direct.
         if isinstance(dob, str):
             birth_date = datetime.strptime(dob, "%Y-%m-%d")
         else:
             birth_date = dob
-
         today = datetime.now()
-        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-        return age
+        return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
     except Exception:
         return 0
 
@@ -71,7 +67,7 @@ def antrenor_dashboard_data():
 
     con = get_conn()
     try:
-        # 1. Vedem ce grupe are voie antrenorul/adminul curent
+        # 1. Aflăm grupele antrenorului
         tr = con.execute("""
             SELECT grupe FROM utilizatori 
             WHERE (LOWER(rol)='antrenor' OR LOWER(rol)='admin') 
@@ -103,7 +99,6 @@ def antrenor_dashboard_data():
             children = _safe_load_children(r["copii"])
             if not children: continue
 
-            # Auto-repair ID-uri lipsă
             was_changed, fixed_children = ensure_child_ids_and_normalize(children)
             if was_changed:
                 con.execute("UPDATE utilizatori SET copii = %s WHERE id = %s",
@@ -111,7 +106,6 @@ def antrenor_dashboard_data():
                 con.commit()
                 children = fixed_children
 
-            # Filtrăm pe grupe
             by_group = {}
             for c in children:
                 g = _normalize_grupa(c.get("grupa"))
@@ -136,48 +130,46 @@ def antrenor_dashboard_data():
                     "copii": kids
                 })
 
-                # --- B. Procesăm SPORTIVII INDEPENDENȚI ---
-                # MODIFICARE: Selectăm 'data_nasterii' ȘI 'gen'
-                sportivi = con.execute("""
-                    SELECT id, username, email, nume_complet, grupe, data_nasterii, gen
-                    FROM utilizatori
-                    WHERE LOWER(rol) = 'sportiv'
-                """).fetchall()
+        # --- B. Procesăm SPORTIVII INDEPENDENȚI (ACUM E ÎN AFARA BUCLEI DE PĂRINȚI) ---
+        sportivi = con.execute("""
+            SELECT id, username, email, nume_complet, grupe, data_nasterii, gen
+            FROM utilizatori
+            WHERE LOWER(rol) = 'sportiv'
+        """).fetchall()
 
-                for s in sportivi:
-                    g_raw = s["grupe"]
-                    if not g_raw: continue
+        for s in sportivi:
+            g_raw = s["grupe"]
+            if not g_raw: continue
 
-                    varsta_reala = _calculate_age(s["data_nasterii"])
-                    # Luăm genul din DB sau punem default '-'
-                    gen_real = s["gen"] if s["gen"] else "—"
+            varsta_reala = _calculate_age(s["data_nasterii"])
+            gen_real = s["gen"] if s["gen"] else "—"
 
-                    sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
+            sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
 
-                    for g_s in sportiv_groups:
-                        if g_s in allowed:
-                            display_name = s["nume_complet"] or s["username"]
+            for g_s in sportiv_groups:
+                if g_s in allowed:
+                    display_name = s["nume_complet"] or s["username"]
 
-                            virtual_child = {
-                                "id": str(s["id"]),
-                                "nume": display_name,
-                                "varsta": varsta_reala,
-                                "gen": gen_real,  # <--- AICI AM MODIFICAT
-                                "grupa": g_s
-                            }
+                    virtual_child = {
+                        "id": str(s["id"]),
+                        "nume": display_name,
+                        "varsta": varsta_reala,
+                        "gen": gen_real,
+                        "grupa": g_s
+                    }
 
-                            results.append({
-                                "grupa": g_s,
-                                "parinte": {
-                                    "id": s["id"],
-                                    "username": s["username"],
-                                    "email": s["email"],
-                                    "display": f"{display_name} (Sportiv)"
-                                },
-                                "copii": [virtual_child]
-                            })
+                    results.append({
+                        "grupa": g_s,
+                        "parinte": {
+                            "id": s["id"],
+                            "username": s["username"],
+                            "email": s["email"],
+                            "display": f"{display_name} (Sportiv)"
+                        },
+                        "copii": [virtual_child]
+                    })
 
-        # Sortare finală
+        # Sortare
         def group_key(name: str):
             import re
             m = re.search(r"(\d+)", name or "")
