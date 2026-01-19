@@ -136,46 +136,46 @@ def antrenor_dashboard_data():
                     "copii": kids
                 })
 
-        # --- B. Procesăm SPORTIVII INDEPENDENȚI ---
-        # MODIFICARE: Selectăm 'data_nasterii' în loc de 'varsta'
-        sportivi = con.execute("""
-            SELECT id, username, email, nume_complet, grupe, data_nasterii
-            FROM utilizatori
-            WHERE LOWER(rol) = 'sportiv'
-        """).fetchall()
+                # --- B. Procesăm SPORTIVII INDEPENDENȚI ---
+                # MODIFICARE: Selectăm 'data_nasterii' ȘI 'gen'
+                sportivi = con.execute("""
+                    SELECT id, username, email, nume_complet, grupe, data_nasterii, gen
+                    FROM utilizatori
+                    WHERE LOWER(rol) = 'sportiv'
+                """).fetchall()
 
-        for s in sportivi:
-            g_raw = s["grupe"]
-            if not g_raw: continue
+                for s in sportivi:
+                    g_raw = s["grupe"]
+                    if not g_raw: continue
 
-            # Calculăm vârsta din data nașterii
-            varsta_reala = _calculate_age(s["data_nasterii"])
+                    varsta_reala = _calculate_age(s["data_nasterii"])
+                    # Luăm genul din DB sau punem default '-'
+                    gen_real = s["gen"] if s["gen"] else "—"
 
-            # Un sportiv poate fi în mai multe grupe
-            sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
+                    sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
 
-            for g_s in sportiv_groups:
-                if g_s in allowed:
-                    display_name = s["nume_complet"] or s["username"]
+                    for g_s in sportiv_groups:
+                        if g_s in allowed:
+                            display_name = s["nume_complet"] or s["username"]
 
-                    virtual_child = {
-                        "id": str(s["id"]),
-                        "nume": display_name,
-                        "varsta": varsta_reala,  # Folosim vârsta calculată
-                        "gen": "—",
-                        "grupa": g_s
-                    }
+                            virtual_child = {
+                                "id": str(s["id"]),
+                                "nume": display_name,
+                                "varsta": varsta_reala,
+                                "gen": gen_real,  # <--- AICI AM MODIFICAT
+                                "grupa": g_s
+                            }
 
-                    results.append({
-                        "grupa": g_s,
-                        "parinte": {
-                            "id": s["id"],
-                            "username": s["username"],
-                            "email": s["email"],
-                            "display": f"{display_name} (Sportiv)"
-                        },
-                        "copii": [virtual_child]
-                    })
+                            results.append({
+                                "grupa": g_s,
+                                "parinte": {
+                                    "id": s["id"],
+                                    "username": s["username"],
+                                    "email": s["email"],
+                                    "display": f"{display_name} (Sportiv)"
+                                },
+                                "copii": [virtual_child]
+                            })
 
         # Sortare finală
         def group_key(name: str):
