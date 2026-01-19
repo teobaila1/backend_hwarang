@@ -57,7 +57,7 @@ app.register_blueprint(stergere_concurs_bp)
 app.register_blueprint(resetare_bp)
 app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
-app.register_blueprint(editare_elev_bp)
+# app.register_blueprint(editare_elev_bp)
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
