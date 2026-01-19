@@ -26,8 +26,8 @@ def login():
     try:
         cur = con.cursor()
 
-        # 1. Căutăm utilizatorul (după username sau email)
-        # --- FIX: Cerem coloana 'parola', NU 'password' ---
+        # 1. Căutăm utilizatorul
+        # Cerem coloana 'parola' (vechea denumire)
         cur.execute("""
             SELECT id, username, email, nume_complet, is_placeholder, parola 
             FROM utilizatori 
@@ -37,17 +37,31 @@ def login():
         user = cur.fetchone()
 
         if not user:
-            return jsonify({"status": "error", "message": "Date de autentificare invalide."}), 401
+            return jsonify({"status": "error", "message": "Utilizatorul nu există."}), 401
 
-        # Luăm parola hash-uită din coloana 'parola'
-        stored_password = user['parola']
+        # --- FIX ROBUST PENTRU PAROLĂ ---
+        raw_pass = user['parola']
+
+        # 1. Convertim la string și ștergem spațiile goale (pentru compatibilitate CHAR/VARCHAR)
+        stored_password = str(raw_pass).strip() if raw_pass else ""
+
+        # DEBUG: Poți vedea asta în Render Logs dacă tot nu merge
+        print(f"[LOGIN DEBUG] User: {username_input} | Hash din DB: {stored_password[:10]}...")
 
         if stored_password == 'NO_LOGIN_ACCOUNT':
             return jsonify({"status": "error", "message": "Acest cont nu are setată o parolă (este placeholder)."}), 403
 
-        if not check_password(password_input, stored_password):
+        # Verificăm parola
+        try:
+            is_valid = check_password(password_input, stored_password)
+        except Exception as e:
+            print(f"[LOGIN ERROR] Eroare la check_password: {e}")
+            is_valid = False
+
+        if not is_valid:
             return jsonify({"status": "error", "message": "Parolă incorectă."}), 401
 
+        # --- PRELUARE DATE SUPLIMENTARE ---
         user_id = user['id']
         username_real = user['username']
 
@@ -55,30 +69,30 @@ def login():
         cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
         rol_row = cur.fetchone()
 
-        # Fallback: Dacă nu are rol în tabelul nou, luăm din tabelul vechi (backup)
         if rol_row:
             user_role = rol_row['rol']
         else:
-            # Încercăm să citim din tabela veche dacă există coloana rol
+            # Fallback la tabelul vechi dacă nu are rol în cel nou
             try:
                 cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
-                user_role = cur.fetchone()['rol']
+                res = cur.fetchone()
+                user_role = res['rol'] if res else "Sportiv"
             except:
-                user_role = "Sportiv"  # Default
+                user_role = "Sportiv"
 
         # 3. CITIM COPIII DIN TABELUL NOU 'COPII' (Doar dacă e părinte)
         lista_copii = []
         if user_role == 'Parinte':
-            # Verificăm dacă există coloana grupa_text sau grupa (pentru compatibilitate)
             try:
+                # Încercăm să citim și grupa_text
                 cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
             except:
-                con.rollback()  # În caz că nu există grupa_text, încercăm fără
+                con.rollback()
+                # Fallback dacă nu există grupa_text
                 cur.execute("SELECT nume, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
 
             rows_copii = cur.fetchall()
             for c in rows_copii:
-                # Extragem grupa sigur
                 grp = c.get('grupa_text') or c.get('grupa') or ""
                 lista_copii.append({
                     "nume": c['nume'],
@@ -102,10 +116,11 @@ def login():
             "rol": user_role,
             "nume_complet": user['nume_complet'],
             "is_placeholder": bool(user['is_placeholder']),
-            "copii": lista_copii  # Trimitem lista proaspătă din SQL
+            "copii": lista_copii
         }), 200
 
     except Exception as e:
+        print(f"[LOGIN CRASH] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         con.close()
