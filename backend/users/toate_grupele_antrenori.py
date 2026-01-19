@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from datetime import datetime  # <--- Import datetime
 from flask import Blueprint, jsonify
 
 from ..accounts.decorators import token_required, admin_required
@@ -27,6 +28,21 @@ def _safe_load_children(raw):
 def _group_sort_key(name: str):
     m = re.search(r"(\d+)", name or "")
     return int(m.group(1)) if m else 9999
+
+
+def _calculate_age(dob):
+    """Calculează vârsta pe baza datei de naștere."""
+    if not dob: return 0
+    try:
+        if isinstance(dob, str):
+            birth_date = datetime.strptime(dob, "%Y-%m-%d")
+        else:
+            birth_date = dob
+        today = datetime.now()
+        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+        return age
+    except Exception:
+        return 0
 
 
 def ensure_child_ids_and_normalize(children):
@@ -81,9 +97,10 @@ def toate_grupele_antrenori():
         WHERE LOWER(rol) IN ('parinte', 'admin')
     """).fetchall()
 
-    # 4. Sportivii Independenți (Aceasta lipsea!)
+    # 4. Sportivii Independenți
+    # MODIFICARE: Selectăm 'data_nasterii' în loc de 'varsta'
     sportivi = con.execute("""
-        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, grupe, varsta
+        SELECT id, username, email, COALESCE(nume_complet, username) AS display_name, grupe, data_nasterii
         FROM utilizatori
         WHERE LOWER(rol) = 'sportiv'
     """).fetchall()
@@ -121,12 +138,15 @@ def toate_grupele_antrenori():
             if not g_raw: continue
             s_groups = [normalize_grupa(x) for x in g_raw.split(",")]
 
+            # Calcul vârstă
+            varsta_reala = _calculate_age(s["data_nasterii"])
+
             for g_s in s_groups:
                 if g_s in groups_map:
                     groups_map[g_s].append({
                         "id": str(s["id"]),
                         "nume": s["display_name"],
-                        "varsta": s["varsta"],
+                        "varsta": varsta_reala,  # Vârsta calculată
                         "gen": "—",
                         "grupa": g_s,
                         "_parent": {

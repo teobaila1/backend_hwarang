@@ -1,6 +1,7 @@
 import re
 import uuid
 import json
+from datetime import datetime  # <--- Import necesar pentru calcul vârstă
 from flask import request, jsonify, Blueprint
 
 from ..accounts.decorators import token_required
@@ -23,6 +24,24 @@ def _safe_load_children(copii_json):
         return v if isinstance(v, list) else []
     except Exception:
         return []
+
+
+def _calculate_age(dob):
+    """Calculează vârsta pe baza datei de naștere."""
+    if not dob:
+        return 0
+    try:
+        # Dacă dob e string, convertim. Dacă e deja date object, folosim direct.
+        if isinstance(dob, str):
+            birth_date = datetime.strptime(dob, "%Y-%m-%d")
+        else:
+            birth_date = dob
+
+        today = datetime.now()
+        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+        return age
+    except Exception:
+        return 0
 
 
 def ensure_child_ids_and_normalize(children):
@@ -117,9 +136,10 @@ def antrenor_dashboard_data():
                     "copii": kids
                 })
 
-        # --- B. Procesăm SPORTIVII INDEPENDENȚI (Aceasta lipsea!) ---
+        # --- B. Procesăm SPORTIVII INDEPENDENȚI ---
+        # MODIFICARE: Selectăm 'data_nasterii' în loc de 'varsta'
         sportivi = con.execute("""
-            SELECT id, username, email, nume_complet, grupe, varsta
+            SELECT id, username, email, nume_complet, grupe, data_nasterii
             FROM utilizatori
             WHERE LOWER(rol) = 'sportiv'
         """).fetchall()
@@ -128,18 +148,20 @@ def antrenor_dashboard_data():
             g_raw = s["grupe"]
             if not g_raw: continue
 
+            # Calculăm vârsta din data nașterii
+            varsta_reala = _calculate_age(s["data_nasterii"])
+
             # Un sportiv poate fi în mai multe grupe
             sportiv_groups = [_normalize_grupa(x) for x in g_raw.split(",")]
 
             for g_s in sportiv_groups:
                 if g_s in allowed:
-                    # Îl afișăm ca un "copil" care este și propriul său "părinte"
                     display_name = s["nume_complet"] or s["username"]
 
                     virtual_child = {
-                        "id": str(s["id"]),  # Folosim ID-ul userului ca ID de copil
+                        "id": str(s["id"]),
                         "nume": display_name,
-                        "varsta": s["varsta"],
+                        "varsta": varsta_reala,  # Folosim vârsta calculată
                         "gen": "—",
                         "grupa": g_s
                     }
@@ -172,7 +194,6 @@ def antrenor_dashboard_data():
 @antrenor_dashboard_copii_parinti_bp.route("/api/copiii_mei", methods=["POST"])
 @token_required
 def copiii_mei():
-    # Rămâne neschimbat
     data = request.get_json(silent=True) or {}
     username = data.get("username")
     if not username: return jsonify({"status": "error"}), 400
