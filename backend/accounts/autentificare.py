@@ -26,8 +26,8 @@ def login():
     try:
         cur = con.cursor()
 
-        # 1. Căutăm utilizatorul
-        # Cerem coloana 'parola' (vechea denumire)
+        # 1. Căutăm utilizatorul (după username sau email)
+        # IMPORTANT: Cerem coloana 'parola' (vechea denumire din baza ta)
         cur.execute("""
             SELECT id, username, email, nume_complet, is_placeholder, parola 
             FROM utilizatori 
@@ -39,40 +39,52 @@ def login():
         if not user:
             return jsonify({"status": "error", "message": "Utilizatorul nu există."}), 401
 
-        # --- FIX ROBUST PENTRU PAROLĂ ---
+        # --- FIX ROBUST PENTRU CITIREA PAROLEI ---
         raw_pass = user['parola']
+        stored_password = ""
 
-        # 1. Convertim la string și ștergem spațiile goale (pentru compatibilitate CHAR/VARCHAR)
-        stored_password = str(raw_pass).strip() if raw_pass else ""
+        if raw_pass:
+            if isinstance(raw_pass, bytes):
+                # Cazul 1: Baza de date returnează bytes (ex: b'$2b$...')
+                # Trebuie decodat în string UTF-8
+                stored_password = raw_pass.decode('utf-8').strip()
+            else:
+                # Cazul 2: Baza de date returnează string (ex: '$2b$...')
+                # Doar curățăm spațiile
+                stored_password = str(raw_pass).strip()
 
-        # DEBUG: Poți vedea asta în Render Logs dacă tot nu merge
-        print(f"[LOGIN DEBUG] User: {username_input} | Hash din DB: {stored_password[:10]}...")
+        # ----------------------------------------
 
         if stored_password == 'NO_LOGIN_ACCOUNT':
             return jsonify({"status": "error", "message": "Acest cont nu are setată o parolă (este placeholder)."}), 403
 
         # Verificăm parola
+        is_valid = False
         try:
+            # check_password ar trebui să primească (parola_in_clar, hash_ul_din_db)
             is_valid = check_password(password_input, stored_password)
         except Exception as e:
-            print(f"[LOGIN ERROR] Eroare la check_password: {e}")
+            print(f"[LOGIN ERROR] Eroare verificare hash: {e}")
             is_valid = False
 
         if not is_valid:
+            # Debugging: Ajută să vezi în logs ce compară (doar hash-ul, nu parola clară)
+            print(f"[LOGIN FAIL] Input User: {username_input}")
+            print(f"[LOGIN FAIL] Hash DB (final): '{stored_password}'")
             return jsonify({"status": "error", "message": "Parolă incorectă."}), 401
 
-        # --- PRELUARE DATE SUPLIMENTARE ---
+        # --- DACA PAROLA E OK, PRELUĂM DATELE ---
         user_id = user['id']
         username_real = user['username']
 
-        # 2. CITIM ROLUL DIN TABELUL NOU 'ROLURI'
+        # 2. CITIM ROLUL
         cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
         rol_row = cur.fetchone()
 
         if rol_row:
             user_role = rol_row['rol']
         else:
-            # Fallback la tabelul vechi dacă nu are rol în cel nou
+            # Fallback la tabelul vechi
             try:
                 cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
                 res = cur.fetchone()
@@ -80,15 +92,13 @@ def login():
             except:
                 user_role = "Sportiv"
 
-        # 3. CITIM COPIII DIN TABELUL NOU 'COPII' (Doar dacă e părinte)
+        # 3. CITIM COPIII (Doar dacă e părinte)
         lista_copii = []
         if user_role == 'Parinte':
             try:
-                # Încercăm să citim și grupa_text
                 cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
             except:
                 con.rollback()
-                # Fallback dacă nu există grupa_text
                 cur.execute("SELECT nume, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
 
             rows_copii = cur.fetchall()
@@ -123,4 +133,4 @@ def login():
         print(f"[LOGIN CRASH] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        con.close()
+        if con: con.close()
