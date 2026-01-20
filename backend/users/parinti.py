@@ -2,6 +2,7 @@ import uuid
 import re
 import json
 import datetime
+from datetime import date
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from ..accounts.decorators import token_required
@@ -20,15 +21,25 @@ def _new_claim_code():
 
 
 def _get_or_create_group_id(cur, group_name):
-    """Helper pentru a găsi ID-ul grupei."""
     if not group_name: return None
     g_norm = _normalize_name(group_name)
     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
     row = cur.fetchone()
     if row: return row['id']
-
     cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
     return cur.fetchone()['id']
+
+
+def _calc_age(dob):
+    """Calculează vârsta numerică."""
+    if not dob: return ""
+    try:
+        today = date.today()
+        if isinstance(dob, str):
+            dob = date.fromisoformat(dob)
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except:
+        return ""
 
 
 # --- 1. CREARE PLACEHOLDER (Admin/Antrenor) ---
@@ -47,7 +58,6 @@ def create_parent_placeholder():
         claim_code = _new_claim_code()
         dummy_email = f"placeholder_{claim_code}@hwarang.temp"
 
-        # Insert User
         cur.execute("""
             INSERT INTO utilizatori (
                 username, nume_complet, email, parola, rol, 
@@ -58,10 +68,7 @@ def create_parent_placeholder():
         """, (nume, nume, dummy_email, claim_code))
 
         parent_id = cur.fetchone()['id']
-
-        # Insert Rol
         cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, 'Parinte')", (parent_id,))
-
         con.commit()
         return jsonify({"status": "success", "id": parent_id, "claim_code": claim_code}), 201
 
@@ -70,7 +77,7 @@ def create_parent_placeholder():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 2. REVENDICARE CONT (Părinte neautentificat) ---
+# --- 2. REVENDICARE CONT ---
 @parinti_bp.patch("/api/parinti/claim")
 def claim_parent_account():
     data = request.get_json(silent=True) or {}
@@ -89,25 +96,19 @@ def claim_parent_account():
     try:
         cur = con.cursor()
 
-        # Găsim contul placeholder
         row = None
         if claim_code:
             cur.execute("SELECT id FROM utilizatori WHERE claim_code = %s AND is_placeholder = 1", (claim_code,))
             row = cur.fetchone()
-            if not row:
-                return jsonify({"status": "error", "message": "Cod invalid sau deja revendicat."}), 404
+            if not row: return jsonify({"status": "error", "message": "Cod invalid."}), 404
         else:
             cur.execute("SELECT id FROM utilizatori WHERE is_placeholder = 1 AND LOWER(username) = LOWER(%s)", (nume,))
             rows = cur.fetchall()
-            if not rows:
-                return jsonify({"status": "error", "message": "Nu există cont de revendicat pe acest nume."}), 404
-            if len(rows) > 1:
-                return jsonify({"status": "error", "message": "Sunt mai mulți părinți cu acest nume. Cere codul."}), 409
+            if not rows: return jsonify({"status": "error", "message": "Nu există cont."}), 404
             row = rows[0]
 
         parent_id = row["id"]
 
-        # Update date Părinte
         fields, values = [], []
         if email: fields.append("email = %s"); values.append(email)
         if parola_hash: fields.append("parola = %s"); values.append(parola_hash)
@@ -116,28 +117,24 @@ def claim_parent_account():
 
         fields.append("is_placeholder = 0")
         fields.append("claim_code = NULL")
-
         if copii_noi:
-            fields.append("copii = %s")  # Backup JSON
+            fields.append("copii = %s")
             values.append(json.dumps(copii_noi))
 
         values.append(parent_id)
         cur.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s", tuple(values))
 
-        # Migrare copii în tabel SQL
         if copii_noi and isinstance(copii_noi, list):
             for copil in copii_noi:
                 c_nume = _normalize_name(copil.get("nume"))
                 c_grupa = _normalize_name(copil.get("grupa"))
                 c_gen = copil.get("gen")
-
                 if c_nume:
                     c_id = uuid.uuid4().hex
                     cur.execute("""
                         INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, added_by_trainer)
                         VALUES (%s, %s, %s, %s, %s, FALSE)
                     """, (c_id, parent_id, c_nume, c_gen, c_grupa))
-
                     if c_grupa:
                         gid = _get_or_create_group_id(cur, c_grupa)
                         if gid:
@@ -152,36 +149,28 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 3. COPIII MEI (Gestionează copiii din dashboard Părinte) ---
-# Aceasta este secțiunea care lipsea!
-
+# --- 3. COPIII MEI (Dashboard Părinte) ---
 @parinti_bp.get("/api/copiii_mei")
 @token_required
 def get_my_children():
-    """Returnează lista copiilor pentru părintele logat."""
-    user_id = request.user_id  # Vine din decorator
+    user_id = request.user_id
     con = get_conn()
     try:
         cur = con.cursor()
-        # Citim din tabelul nou 'copii'
-        try:
-            cur.execute("SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
-        except:
-            con.rollback()
-            # Fallback (dacă nu ai apucat să migrezi coloana grupa_text)
-            cur.execute("SELECT id, nume, gen, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
-
+        cur.execute("SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
         rows = cur.fetchall()
+
         children = []
         for r in rows:
-            dob = str(r.get('data_nasterii') or "")
+            # Calculăm vârsta numerică pentru frontend
+            varsta_num = _calc_age(r.get('data_nasterii'))
             grp = r.get('grupa_text') or ""
             children.append({
                 "id": r['id'],
                 "nume": r['nume'],
                 "gen": r['gen'],
                 "grupa": grp,
-                "varsta": dob  # Frontend-ul se așteaptă la varsta, trimitem data nașterii ca string
+                "varsta": str(varsta_num)  # Trimitem numărul ca string
             })
 
         return jsonify(children), 200
@@ -192,40 +181,33 @@ def get_my_children():
 @parinti_bp.post("/api/copiii_mei")
 @token_required
 def add_my_child():
-    """Părintele adaugă un copil nou."""
     user_id = request.user_id
     data = request.get_json(silent=True) or {}
-
     nume = _normalize_name(data.get("nume"))
     grupa = _normalize_name(data.get("grupa"))
     gen = data.get("gen")
 
-    # Frontend-ul trimite "varsta" (int) din formular.
-    # Noi avem "data_nasterii" (DATE).
-    # Facem o aproximare ca să nu crape (ex: 1 Ianuarie a anului calculat)
+    # Frontend trimite vârsta (int). O convertim în Data Nașterii estimată (1 Ianuarie)
     varsta_input = data.get("varsta")
     data_nasterii_calc = None
-
     if varsta_input and str(varsta_input).isdigit():
         an_curent = datetime.datetime.now().year
         an_nastere = an_curent - int(varsta_input)
         data_nasterii_calc = f"{an_nastere}-01-01"
 
     if not nume:
-        return jsonify({"status": "error", "message": "Numele copilului este obligatoriu"}), 400
+        return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
 
     con = get_conn()
     try:
         cur = con.cursor()
         new_id = uuid.uuid4().hex
 
-        # 1. Insert în COPII
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)
         """, (new_id, user_id, nume, gen, grupa, data_nasterii_calc))
 
-        # 2. Insert în SPORTIVI_PE_GRUPE (pentru Antrenor)
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
             if gid:
@@ -233,7 +215,6 @@ def add_my_child():
 
         con.commit()
         return jsonify({"status": "success", "message": "Copil adăugat!"}), 200
-
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -242,18 +223,13 @@ def add_my_child():
 @parinti_bp.delete("/api/copiii_mei/<child_id>")
 @token_required
 def delete_my_child(child_id):
-    """Părintele șterge un copil."""
     user_id = request.user_id
     con = get_conn()
     try:
         cur = con.cursor()
-
-        # Verificăm că e copilul lui
         cur.execute("DELETE FROM copii WHERE id = %s AND id_parinte = %s", (child_id, user_id))
-
         if cur.rowcount == 0:
-            return jsonify({"status": "error", "message": "Copilul nu a fost găsit sau nu îți aparține."}), 404
-
+            return jsonify({"status": "error", "message": "Eroare la ștergere."}), 404
         con.commit()
         return jsonify({"status": "success", "message": "Copil șters."}), 200
     except Exception as e:
