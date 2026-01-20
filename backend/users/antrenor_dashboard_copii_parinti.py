@@ -6,6 +6,7 @@ from backend.config import get_conn
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
 
+
 def _calculate_age(dob):
     if not dob: return 0
     if isinstance(dob, str):
@@ -16,6 +17,8 @@ def _calculate_age(dob):
     today = datetime.now()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
+
+# --- RUTA 1: Citire Date Dashboard (existentă) ---
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
 @token_required
 def antrenor_dashboard_data():
@@ -37,11 +40,10 @@ def antrenor_dashboard_data():
         trainer_id = trainer_row['id']
         trainer_rol = trainer_row['rol'].lower()
 
-        # 2. Găsim grupele (LOGICA MULTI-ANTRENOR)
+        # 2. Găsim grupele
         if trainer_rol == 'admin':
             cur.execute("SELECT id, nume FROM grupe ORDER BY nume ASC")
         else:
-            # Căutăm în tabelul nou de legătură + compatibilitate veche
             cur.execute("""
                 SELECT DISTINCT g.id, g.nume 
                 FROM grupe g
@@ -151,3 +153,41 @@ def antrenor_dashboard_data():
     except Exception as e:
         print(f"Eroare SQL Dashboard: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if con: con.close()
+
+
+# --- RUTA 2: Ștergere Elev (NOU ADĂUGATĂ) ---
+@antrenor_dashboard_copii_parinti_bp.delete("/api/elevi/<student_id>")
+@token_required
+def sterge_elev(student_id):
+    con = get_conn()
+    try:
+        cur = con.cursor()
+
+        # 1. Încercăm să ștergem din tabelul 'copii' (dacă e copil)
+        # ID-urile copiilor sunt UUID-uri lungi (text)
+        cur.execute("DELETE FROM copii WHERE id = %s", (student_id,))
+        rows_deleted = cur.rowcount
+
+        # 2. Dacă nu s-a șters nimic, poate e un adult (User) scos din grupă
+        # Dacă e adult, NU îi ștergem contul, ci doar legătura din 'sportivi_pe_grupe'
+        if rows_deleted == 0:
+            # Verificăm dacă e un ID numeric (adult) sau text
+            # Dar SQL-ul se descurcă cu cast automat de multe ori.
+            # Totuși, să fim siguri că ștergem doar legătura.
+            cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (student_id,))
+            rows_deleted = cur.rowcount
+
+        if rows_deleted > 0:
+            con.commit()
+            return jsonify({"status": "success", "message": "Elev șters cu succes."}), 200
+        else:
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+
+    except Exception as e:
+        con.rollback()
+        print(f"[DELETE ERROR] {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if con: con.close()
