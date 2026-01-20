@@ -65,7 +65,7 @@ def login():
                 con.rollback()
                 print(f"[LOGIN DEBUG] Nici structura veche nu a mers: {e2}")
 
-        # Verificarea Parolei
+        # Verificare parola
         if user:
             stored_pass = user.get('password_hash') or user.get('parola') or ""
             pass_ok = False
