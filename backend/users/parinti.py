@@ -145,15 +145,14 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 3. COPIII MEI (Rutele de Dashboard) ---
+
+
+# --- 1. RUTELE PENTRU COPIII MEI (Dashboard Părinte) ---
 
 @parinti_bp.get("/api/copiii_mei")
 @token_required
 def get_my_children():
-    user_id = request.user_id
-
-    # DEBUG
-    print(f"\n[DEBUG COPII] User ID Logat: {user_id}")
+    user_id = request.user_id  # Aici aveai eroarea 500 înainte (AttributeError)
 
     con = get_conn()
     try:
@@ -161,8 +160,6 @@ def get_my_children():
         sql = "SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s"
         cur.execute(sql, (user_id,))
         rows = cur.fetchall()
-
-        print(f"[DEBUG COPII] Gasiti: {len(rows)}")
 
         children = []
         for r in rows:
@@ -178,7 +175,6 @@ def get_my_children():
 
         return jsonify(children), 200
     except Exception as e:
-        print(f"[ERROR COPII] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
@@ -187,13 +183,14 @@ def get_my_children():
 @parinti_bp.post("/api/copiii_mei")
 @token_required
 def add_my_child():
-    user_id = request.user_id
+    user_id = request.user_id  # Token-ul ne spune cine este părintele
     data = request.get_json(silent=True) or {}
 
     nume = _normalize_name(data.get("nume"))
     grupa = _normalize_name(data.get("grupa"))
     gen = data.get("gen")
 
+    # Calculăm data nașterii din vârstă
     varsta_input = data.get("varsta")
     data_nasterii_calc = None
     if varsta_input and str(varsta_input).isdigit():
@@ -209,8 +206,6 @@ def add_my_child():
         cur = con.cursor()
         new_id = uuid.uuid4().hex
 
-        print(f"[DEBUG ADD] Adaug copil pentru: {user_id}")
-
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)
@@ -225,8 +220,9 @@ def add_my_child():
         return jsonify({"status": "success", "message": "Copil adăugat!"}), 200
     except Exception as e:
         con.rollback()
-        print(f"[ERROR ADD] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if con: con.close()
 
 
 @parinti_bp.delete("/api/copiii_mei/<child_id>")
@@ -238,8 +234,13 @@ def delete_my_child(child_id):
         cur = con.cursor()
         cur.execute("DELETE FROM copii WHERE id = %s AND id_parinte = %s", (child_id, user_id))
         if cur.rowcount == 0:
-            return jsonify({"status": "error", "message": "Eroare la ștergere."}), 404
+            return jsonify({"status": "error", "message": "Eroare la ștergere sau copilul nu îți aparține."}), 404
         con.commit()
         return jsonify({"status": "success", "message": "Copil șters."}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if con: con.close()
+
+# --- 2. RESTUL FUNCȚIILOR (Placeholder & Claim) ---
+# Adaugă-le aici doar dacă le folosești. Pentru dashboard, cele de mai sus sunt suficiente.
