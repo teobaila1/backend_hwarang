@@ -12,36 +12,36 @@ modifica_rol_bp = Blueprint('modifica_rol', __name__)
 def modifica_rol():
     data = request.get_json(silent=True) or {}
 
-    # --- DEBUGGING: Vedem în logs ce trimite frontend-ul ---
-    print(f"\n[DEBUG ROL] Date primite de la frontend: {data}")
-    # ------------------------------------------------------
+    print(f"\n[DEBUG ROL] Date primite: {data}")
 
-    # Încercăm toate variantele posibile de nume
+    # 1. Extragem Username-ul țintă
     target_username = (
             data.get('username') or
             data.get('target_username') or
             data.get('user')
     )
 
+    # 2. Extragem Rolul Nou (AICI ESTE FIX-UL)
     new_role = (
             data.get('rol') or
             data.get('role') or
+            data.get('rol_nou') or  # <--- ASTA LIPSEA! Frontend-ul trimite 'rol_nou'
             data.get('new_role') or
             data.get('newRole')
     )
 
     if not target_username or not new_role:
-        print(f"[DEBUG ERROR] Lipsesc datele! Am gasit username={target_username}, rol={new_role}")
+        print(f"[DEBUG ERROR] Date incomplete! User={target_username}, Rol={new_role}")
         return jsonify({
             "status": "error",
-            "message": f"Date incomplete. Am primit: {data}"
+            "message": f"Lipsesc datele. Am primit: {data}"
         }), 400
 
     con = get_conn()
     try:
         cur = con.cursor()
 
-        # 1. Găsim ID-ul userului
+        # 3. Găsim ID-ul userului
         cur.execute("SELECT id FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (target_username,))
         row = cur.fetchone()
         if not row:
@@ -49,22 +49,22 @@ def modifica_rol():
 
         user_id = row['id']
 
-        # 2. Actualizăm tabelul ROLURI
+        # 4. Actualizăm sau Inserăm în tabelul ROLURI
         cur.execute("SELECT id FROM roluri WHERE id_user = %s", (user_id,))
         if cur.fetchone():
             cur.execute("UPDATE roluri SET rol = %s WHERE id_user = %s", (new_role, user_id))
         else:
             cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, %s)", (user_id, new_role))
 
-        # 3. Actualizăm și tabelul utilizatori
+        # 5. Actualizăm și tabelul principal (backup)
         cur.execute("UPDATE utilizatori SET rol = %s WHERE id = %s", (new_role, user_id))
 
         con.commit()
-        return jsonify({"status": "success", "message": f"Rol schimbat în {new_role}"}), 200
+        return jsonify({"status": "success", "message": f"Rol schimbat cu succes în {new_role}."}), 200
 
     except Exception as e:
         con.rollback()
-        print(f"[DEBUG SQL ERROR] {e}")
+        print(f"[SQL ERROR] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()

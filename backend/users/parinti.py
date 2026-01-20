@@ -145,15 +145,12 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-
-
-# --- 1. RUTELE PENTRU COPIII MEI (Dashboard Părinte) ---
+# --- 1. RUTELE PENTRU COPIII MEI ---
 
 @parinti_bp.get("/api/copiii_mei")
 @token_required
 def get_my_children():
-    user_id = request.user_id  # Aici aveai eroarea 500 înainte (AttributeError)
-
+    user_id = request.user_id
     con = get_conn()
     try:
         cur = con.cursor()
@@ -183,23 +180,40 @@ def get_my_children():
 @parinti_bp.post("/api/copiii_mei")
 @token_required
 def add_my_child():
-    user_id = request.user_id  # Token-ul ne spune cine este părintele
+    user_id = request.user_id
     data = request.get_json(silent=True) or {}
 
-    nume = _normalize_name(data.get("nume"))
-    grupa = _normalize_name(data.get("grupa"))
-    gen = data.get("gen")
+    # --- DEBUG: Vedem ce trimite site-ul ---
+    print(f"\n[DEBUG ADD CHILD] Date primite: {data}")
+    # ---------------------------------------
 
-    # Calculăm data nașterii din vârstă
-    varsta_input = data.get("varsta")
+    # Încercăm să ghicim câmpurile dacă au alte nume
+    nume = (
+            _normalize_name(data.get("nume")) or
+            _normalize_name(data.get("nume_copil")) or
+            _normalize_name(data.get("name"))
+    )
+
+    grupa = (
+            _normalize_name(data.get("grupa")) or
+            _normalize_name(data.get("group"))
+    )
+
+    gen = data.get("gen") or data.get("gender")
+
+    varsta_input = data.get("varsta") or data.get("age")
+
+    # Validare
+    if not nume:
+        print(f"[DEBUG ERROR] Nume lipsa! Am primit: {data}")
+        return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
+
+    # Calcul data nașterii
     data_nasterii_calc = None
     if varsta_input and str(varsta_input).isdigit():
         an_curent = datetime.datetime.now().year
         an_nastere = an_curent - int(varsta_input)
         data_nasterii_calc = f"{an_nastere}-01-01"
-
-    if not nume:
-        return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
 
     con = get_conn()
     try:
@@ -220,6 +234,7 @@ def add_my_child():
         return jsonify({"status": "success", "message": "Copil adăugat!"}), 200
     except Exception as e:
         con.rollback()
+        print(f"[SQL ERROR] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
@@ -234,7 +249,7 @@ def delete_my_child(child_id):
         cur = con.cursor()
         cur.execute("DELETE FROM copii WHERE id = %s AND id_parinte = %s", (child_id, user_id))
         if cur.rowcount == 0:
-            return jsonify({"status": "error", "message": "Eroare la ștergere sau copilul nu îți aparține."}), 404
+            return jsonify({"status": "error", "message": "Eroare la ștergere."}), 404
         con.commit()
         return jsonify({"status": "success", "message": "Copil șters."}), 200
     except Exception as e:
@@ -242,5 +257,4 @@ def delete_my_child(child_id):
     finally:
         if con: con.close()
 
-# --- 2. RESTUL FUNCȚIILOR (Placeholder & Claim) ---
-# Adaugă-le aici doar dacă le folosești. Pentru dashboard, cele de mai sus sunt suficiente.
+# --- Funcțiile Placeholder/Claim (opțional, le poți lăsa dacă le folosești) ---
