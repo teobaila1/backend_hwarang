@@ -1,133 +1,88 @@
 import os
 import jwt
 import datetime
-import json
 from flask import Blueprint, request, jsonify
+from werkzeug.security import check_password_hash
 from backend.config import get_conn
-from backend.passwords.security import check_password
 
 autentificare_bp = Blueprint('autentificare', __name__)
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 
 
-@autentificare_bp.post('/api/login')
+@autentificare_bp.post('/api/autentificare')
 def login():
     data = request.get_json(silent=True) or {}
-    username_input = (data.get('username') or "").strip()
-    password_input = data.get('password')
+    username = data.get('username')
+    password = data.get('parola')
 
-    if not username_input or not password_input:
-        return jsonify({"status": "error", "message": "Username și parola sunt obligatorii!"}), 400
+    if not username or not password:
+        return jsonify({'status': 'error', 'message': 'Username și parola sunt obligatorii!'}), 400
 
     con = get_conn()
     try:
         cur = con.cursor()
-
-        # 1. Căutăm utilizatorul
+        # Căutăm utilizatorul (case-insensitive la username)
         cur.execute("""
-            SELECT id, username, email, nume_complet, is_placeholder, parola 
+            SELECT id, username, password_hash, rol, nume_complet, email 
             FROM utilizatori 
-            WHERE LOWER(username) = LOWER(%s) OR LOWER(email) = LOWER(%s)
-        """, (username_input, username_input))
-
+            WHERE LOWER(username) = LOWER(%s)
+        """, (username,))
         user = cur.fetchone()
 
-        if not user:
-            return jsonify({"status": "error", "message": "Utilizatorul nu există."}), 401
+        # Verificăm parola (suportăm și parole vechi text-clar, și hash-uri noi)
+        if user:
+            stored_pass = user['password_hash'] or ""  # Uneori coloana e password sau parola
+            pass_ok = False
 
-        # --- FIX SUPREM PENTRU PAROLĂ ---
-        raw_pass = user['parola']
-        stored_password = ""
-
-        if raw_pass:
-            # Convertim orice ar fi în string
-            if isinstance(raw_pass, bytes):
-                stored_password = raw_pass.decode('utf-8').strip()
-            else:
-                stored_password = str(raw_pass).strip()
-
-            # ELIMINĂM ARTEFACTELE PYTHON (b'...')
-            # Aceasta este linia care repară parolele vechi
-            if stored_password.startswith("b'") and stored_password.endswith("'"):
-                stored_password = stored_password[2:-1]
-            elif stored_password.startswith('b"') and stored_password.endswith('"'):
-                stored_password = stored_password[2:-1]
-
-        if stored_password == 'NO_LOGIN_ACCOUNT':
-            return jsonify({"status": "error", "message": "Acest cont este placeholder."}), 403
-
-        # --- VERIFICARE ---
-        is_valid = False
-
-        # A. Metoda Hash (Normală)
-        try:
-            if check_password(password_input, stored_password):
-                is_valid = True
-        except Exception:
-            pass
-
-        # B. Metoda Fallback (Text Simplu) - Doar dacă A eșuează
-        if not is_valid:
-            if stored_password == password_input:
-                is_valid = True
-
-        if not is_valid:
-            print(f"[LOGIN FAIL] User: {username_input} | Hash curatat: {stored_password}")
-            return jsonify({"status": "error", "message": "Parolă incorectă."}), 401
-
-        # --- LOGIN REUȘIT: Preluăm datele ---
-        user_id = user['id']
-        username_real = user['username']
-
-        # Citim Rolul
-        cur.execute("SELECT rol FROM roluri WHERE id_user = %s", (user_id,))
-        rol_row = cur.fetchone()
-        if rol_row:
-            user_role = rol_row['rol']
-        else:
+            # 1. Încercăm verificare hash
             try:
-                cur.execute("SELECT rol FROM utilizatori WHERE id = %s", (user_id,))
-                res = cur.fetchone()
-                user_role = res['rol'] if res else "Sportiv"
+                if check_password_hash(stored_pass, password):
+                    pass_ok = True
             except:
-                user_role = "Sportiv"
+                pass  # Nu e hash valid
 
-        # Citim Copiii (Dacă e părinte)
-        lista_copii = []
-        if user_role == 'Parinte':
-            try:
-                cur.execute("SELECT nume, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
-            except:
-                con.rollback()
-                cur.execute("SELECT nume, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
+            # 2. Dacă nu e hash, verificăm text simplu (pentru conturi vechi/importate)
+            if not pass_ok and stored_pass == password:
+                pass_ok = True
 
-            rows_copii = cur.fetchall()
-            for c in rows_copii:
-                grp = c.get('grupa_text') or c.get('grupa') or ""
-                dob = str(c['data_nasterii']) if c.get('data_nasterii') else ""
-                lista_copii.append({"nume": c['nume'], "grupa": grp, "varsta": dob})
+            if pass_ok:
+                # Generăm Token-ul
+                token = jwt.encode({
+                    'user_id': user['id'],
+                    'username': user['username'],
+                    'rol': user['rol'],
+                    'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+                }, SECRET_KEY, algorithm="HS256")
 
-        # Generăm Token
-        token = jwt.encode({
-            'user_id': user_id,
-            'username': username_real,
-            'rol': user_role,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-        }, SECRET_KEY, algorithm="HS256")
+                # --- AICI ESTE FIX-UL PENTRU UNDEFINED ---
+                # Trimitem TOATE datele pe care le-ar putea căuta frontend-ul
+                return jsonify({
+                    'status': 'success',
+                    'token': token,
+                    'username': user['username'],  # Frontend-ul caută asta
+                    'nume_complet': user['nume_complet'],  # Sau asta
+                    'rol': user['rol'],
+                    'user_id': user['id'],
+                    'message': 'Autentificare reușită!'
+                }), 200
 
-        return jsonify({
-            "status": "success",
-            "token": token,
-            "username": username_real,
-            "email": user['email'],
-            "rol": user_role,
-            "nume_complet": user['nume_complet'],
-            "is_placeholder": bool(user['is_placeholder']),
-            "copii": lista_copii
-        }), 200
+        return jsonify({'status': 'error', 'message': 'Nume utilizator sau parolă incorecte.'}), 401
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"[LOGIN ERROR] {e}")
+        # Fallback pentru coloana parola vs password_hash dacă ai structura veche
+        try:
+            # Încercare disperată pe coloana veche 'parola'
+            cur.execute("SELECT id, username, parola, rol FROM utilizatori WHERE username=%s", (username,))
+            u_old = cur.fetchone()
+            if u_old and u_old['parola'] == password:
+                token = jwt.encode({'user_id': u_old['id'], 'rol': u_old['rol']}, SECRET_KEY, algorithm="HS256")
+                return jsonify(
+                    {'status': 'success', 'token': token, 'username': u_old['username'], 'rol': u_old['rol']}), 200
+        except:
+            pass
+
+        return jsonify({'status': 'error', 'message': 'Eroare server.'}), 500
     finally:
         if con: con.close()
