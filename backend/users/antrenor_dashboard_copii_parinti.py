@@ -55,26 +55,24 @@ def antrenor_dashboard_data():
     try:
         cur = con.cursor()
 
-        # 1. Identificăm antrenorul
+        # 1. Identificăm antrenorul (ID-ul e important)
         cur.execute("SELECT id, rol FROM utilizatori WHERE username = %s", (trainer_username,))
         trainer_row = cur.fetchone()
         if not trainer_row:
             return jsonify({"status": "success", "date": []}), 200
 
         trainer_id = trainer_row['id']
-        trainer_rol = trainer_row['rol'].lower()
+        # trainer_rol nu mai contează aici, vrem să filtrăm strict după ID
 
-        # 2. Găsim grupele
-        if trainer_rol == 'admin':
-            cur.execute("SELECT id, nume FROM grupe ORDER BY nume ASC")
-        else:
-            cur.execute("""
-                SELECT DISTINCT g.id, g.nume 
-                FROM grupe g
-                LEFT JOIN antrenori_pe_grupe ag ON g.id = ag.id_grupa
-                WHERE ag.id_antrenor = %s OR g.id_antrenor = %s
-                ORDER BY g.nume ASC
-            """, (trainer_id, trainer_id))
+        # 2. Găsim grupele (MODIFICAT: ACUM FILTRĂM PENTRU TOATĂ LUMEA)
+        # Indiferent dacă e Admin sau Antrenor, arătăm doar grupele asignate lui.
+        cur.execute("""
+            SELECT DISTINCT g.id, g.nume 
+            FROM grupe g
+            LEFT JOIN antrenori_pe_grupe ag ON g.id = ag.id_grupa
+            WHERE ag.id_antrenor = %s OR g.id_antrenor = %s
+            ORDER BY g.nume ASC
+        """, (trainer_id, trainer_id))
 
         grupe_rows = cur.fetchall()
         if not grupe_rows:
@@ -186,12 +184,9 @@ def sterge_elev(student_id):
     con = get_conn()
     try:
         cur = con.cursor()
-
-        # 1. Încercăm să ștergem din copii
         cur.execute("DELETE FROM copii WHERE id = %s", (student_id,))
         rows_deleted = cur.rowcount
 
-        # 2. Dacă nu, scoatem din grupă (adult)
         if rows_deleted == 0:
             cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (student_id,))
             rows_deleted = cur.rowcount
@@ -209,7 +204,7 @@ def sterge_elev(student_id):
         if con: con.close()
 
 
-# --- RUTA 3: Actualizare Elev (NOU ADĂUGATĂ) ---
+# --- RUTA 3: Actualizare Elev ---
 @antrenor_dashboard_copii_parinti_bp.patch("/api/elevi/<student_id>")
 @token_required
 def editeaza_elev(student_id):
@@ -224,18 +219,14 @@ def editeaza_elev(student_id):
     try:
         cur = con.cursor()
 
-        # 1. Calculăm data nașterii dacă s-a schimbat vârsta
         data_nasterii_calc = None
         if varsta and str(varsta).isdigit():
             an_curent = datetime.now().year
             an_nastere = an_curent - int(varsta)
             data_nasterii_calc = f"{an_nastere}-01-01"
 
-        # 2. Pregătim numele grupei (normalizat)
         grupa_noua = _normalize_group_name(grupa_input) if grupa_input else None
 
-        # 3. Actualizăm tabelul 'copii'
-        # Construim query dinamic pentru a nu suprascrie cu NULL valorile lipsă
         fields = []
         vals = []
 
@@ -249,7 +240,7 @@ def editeaza_elev(student_id):
             fields.append("data_nasterii = %s")
             vals.append(data_nasterii_calc)
         if grupa_noua:
-            fields.append("grupa_text = %s")  # Actualizăm textul grupei
+            fields.append("grupa_text = %s")
             vals.append(grupa_noua)
 
         if not fields:
@@ -261,18 +252,13 @@ def editeaza_elev(student_id):
         cur.execute(sql, tuple(vals))
 
         if cur.rowcount == 0:
-            # Dacă nu e copil, poate e User (Adult). De regulă nu edităm Useri aici,
-            # dar putem întoarce o eroare explicită sau ignora.
             return jsonify({"status": "error",
                             "message": "Nu se pot edita conturile de utilizatori (adulți) din acest meniu."}), 404
 
-        # 4. Dacă s-a schimbat grupa, trebuie să mutăm copilul în noua grupă
         if grupa_noua:
             gid = _get_or_create_group_id(cur, grupa_noua)
             if gid:
-                # Actualizăm legătura
                 cur.execute("UPDATE sportivi_pe_grupe SET id_grupa = %s WHERE id_sportiv_copil = %s", (gid, student_id))
-                # Dacă nu exista legătura înainte (caz rar), o creăm
                 if cur.rowcount == 0:
                     cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
                                 (gid, student_id))
