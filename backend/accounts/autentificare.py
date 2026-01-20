@@ -10,13 +10,12 @@ autentificare_bp = Blueprint('autentificare', __name__)
 SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 
 
-# --- FIX 1: Acceptăm ambele variante de rută (frontend-ul tau pare sa ceara /api/login) ---
 @autentificare_bp.route('/api/autentificare', methods=['POST'])
 @autentificare_bp.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json(silent=True) or {}
     username = data.get('username')
-    password = data.get('parola') or data.get('password')  # Acceptăm și 'password'
+    password = data.get('parola') or data.get('password')
 
     if not username or not password:
         return jsonify({'status': 'error', 'message': 'Username și parola sunt obligatorii!'}), 400
@@ -25,87 +24,64 @@ def login():
     try:
         cur = con.cursor()
 
-        # Încercarea 1: Structura nouă (cu password_hash)
-        try:
-            cur.execute("""
-                SELECT id, username, password_hash, rol, nume_complet, email 
-                FROM utilizatori 
-                WHERE LOWER(username) = LOWER(%s)
-            """, (username,))
-            user = cur.fetchone()
-        except Exception as e:
-            # Dacă coloana password_hash nu există, PostgreSQL dă eroare.
-            # Trebuie să facem ROLLBACK înainte de a încerca altceva!
-            con.rollback()
-            user = None
-            print(f"[LOGIN DEBUG] Nu am gasit structura noua: {e}")
+        # --- SOLUȚIA UNIVERSALĂ ---
+        # Folosim SELECT * pentru a nu primi eroare dacă lipsește vreo coloană (ex: password_hash sau nume_complet)
+        cur.execute("SELECT * FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (username,))
+        user_row = cur.fetchone()
 
-        # Încercarea 2: Structura veche (Fallback pe coloana 'parola')
-        if not user:
-            try:
-                cur = con.cursor()  # Cursor nou după rollback
-                cur.execute("""
-                    SELECT id, username, parola, rol, nume_complet, email 
-                    FROM utilizatori 
-                    WHERE LOWER(username) = LOWER(%s)
-                """, (username,))
-                user_old = cur.fetchone()
+        if user_row:
+            # Extragem datele în siguranță folosind .get()
+            # Astfel, dacă coloana nu există în DB, primim None în loc de eroare
 
-                # Adaptăm datele vechi la formatul nou
-                if user_old:
-                    user = {
-                        'id': user_old['id'],
-                        'username': user_old['username'],
-                        'password_hash': user_old['parola'],  # Punem parola text aici
-                        'rol': user_old['rol'],
-                        'nume_complet': user_old.get('nume_complet') or user_old['username'],
-                        'email': user_old.get('email')
-                    }
-            except Exception as e2:
-                con.rollback()
-                print(f"[LOGIN DEBUG] Nici structura veche nu a mers: {e2}")
+            # 1. Găsirea parolei (căutăm în ambele coloane posibile)
+            stored_pass = user_row.get('password_hash') or user_row.get('parola') or ""
 
-        # Verificare parola
-        if user:
-            stored_pass = user.get('password_hash') or user.get('parola') or ""
+            # 2. Găsirea numelui complet (Fix pentru "UNDEFINED")
+            # Dacă nu există nume_complet, folosim username-ul ca să nu apară undefined
+            full_name = user_row.get('nume_complet')
+            if not full_name or full_name.lower() == 'none':
+                full_name = user_row.get('username')
+
+            # 3. Verificarea efectivă a parolei
             pass_ok = False
 
-            # A. Verificare Hash (pentru conturi noi)
+            # A. Verificare Hash
             try:
                 if check_password_hash(stored_pass, password):
                     pass_ok = True
             except:
                 pass
 
-                # B. Verificare Text Simplu (pentru conturi vechi)
+                # B. Verificare Text Simplu (pentru baza ta veche)
             if not pass_ok and stored_pass == password:
                 pass_ok = True
 
             if pass_ok:
-                # Generăm Token
+                # Generare Token
                 token = jwt.encode({
-                    'user_id': user['id'],
-                    'username': user['username'],
-                    'rol': user['rol'],
+                    'user_id': user_row['id'],
+                    'username': user_row['username'],
+                    'rol': user_row['rol'],
                     'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
                 }, SECRET_KEY, algorithm="HS256")
 
-                print(f"[LOGIN SUCCESS] User: {user['username']}")
+                print(f"[LOGIN SUCCESS] User: {user_row['username']} | Name: {full_name}")
 
+                # Trimitem datele curate către frontend
                 return jsonify({
                     'status': 'success',
                     'token': token,
-                    'username': user['username'],
-                    'nume_complet': user['nume_complet'],  # Rezolvă "undefined"
-                    'rol': user['rol'],
-                    'user_id': user['id'],
+                    'username': user_row['username'],
+                    'nume_complet': full_name,  # Aici va fi sigur un text, nu null/undefined
+                    'rol': user_row['rol'],
+                    'user_id': user_row['id'],
                     'message': 'Autentificare reușită!'
                 }), 200
 
         return jsonify({'status': 'error', 'message': 'Nume utilizator sau parolă incorecte.'}), 401
 
     except Exception as e:
-        print(f"[LOGIN CRITICAL ERROR] {e}")
+        print(f"[LOGIN ERROR] {e}")
         return jsonify({'status': 'error', 'message': 'Eroare server la autentificare.'}), 500
     finally:
         if con: con.close()
