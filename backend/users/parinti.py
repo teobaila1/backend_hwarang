@@ -64,6 +64,11 @@ def _calc_age(dob):
         return ""
 
 
+
+def _new_claim_code():
+    return uuid.uuid4().hex[:8].upper()
+
+
 # --- 1. CREARE PLACEHOLDER ---
 @parinti_bp.post("/api/parinti/placeholder")
 @token_required
