@@ -42,13 +42,12 @@ def _calc_age(dob):
         return ""
 
 
-# --- 1. CREARE PLACEHOLDER (Admin/Antrenor) ---
+# --- 1. CREARE PLACEHOLDER ---
 @parinti_bp.post("/api/parinti/placeholder")
 @token_required
 def create_parent_placeholder():
     data = request.get_json(silent=True) or {}
     nume = _normalize_name(data.get("nume"))
-
     if not nume:
         return jsonify({"status": "error", "message": "Numele părintelui este obligatoriu."}), 400
 
@@ -71,7 +70,6 @@ def create_parent_placeholder():
         cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, 'Parinte')", (parent_id,))
         con.commit()
         return jsonify({"status": "success", "id": parent_id, "claim_code": claim_code}), 201
-
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -95,8 +93,6 @@ def claim_parent_account():
     con = get_conn()
     try:
         cur = con.cursor()
-
-        row = None
         if claim_code:
             cur.execute("SELECT id FROM utilizatori WHERE claim_code = %s AND is_placeholder = 1", (claim_code,))
             row = cur.fetchone()
@@ -108,7 +104,6 @@ def claim_parent_account():
             row = rows[0]
 
         parent_id = row["id"]
-
         fields, values = [], []
         if email: fields.append("email = %s"); values.append(email)
         if parola_hash: fields.append("parola = %s"); values.append(parola_hash)
@@ -140,16 +135,14 @@ def claim_parent_account():
                         if gid:
                             cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
                                         (gid, c_id))
-
         con.commit()
         return jsonify({"status": "success", "id": parent_id, "message": "Cont activat!"}), 200
-
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 3. COPIII MEI (Dashboard Părinte) ---
+# --- 3. COPIII MEI (DASHBOARD PARINTE) - RUTA CARE LIPSEA ---
 @parinti_bp.get("/api/copiii_mei")
 @token_required
 def get_my_children():
@@ -157,12 +150,13 @@ def get_my_children():
     con = get_conn()
     try:
         cur = con.cursor()
+        # Citim copii din tabelul SQL
         cur.execute("SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s", (user_id,))
         rows = cur.fetchall()
 
         children = []
         for r in rows:
-            # Calculăm vârsta numerică pentru frontend
+            # Calculăm vârsta numerică pentru afișare
             varsta_num = _calc_age(r.get('data_nasterii'))
             grp = r.get('grupa_text') or ""
             children.append({
@@ -170,7 +164,7 @@ def get_my_children():
                 "nume": r['nume'],
                 "gen": r['gen'],
                 "grupa": grp,
-                "varsta": str(varsta_num)  # Trimitem numărul ca string
+                "varsta": str(varsta_num)  # Trimitem vârsta calculată
             })
 
         return jsonify(children), 200
@@ -183,11 +177,12 @@ def get_my_children():
 def add_my_child():
     user_id = request.user_id
     data = request.get_json(silent=True) or {}
+
     nume = _normalize_name(data.get("nume"))
     grupa = _normalize_name(data.get("grupa"))
     gen = data.get("gen")
 
-    # Frontend trimite vârsta (int). O convertim în Data Nașterii estimată (1 Ianuarie)
+    # Transformăm vârsta (int) în Data Nașterii (DATE)
     varsta_input = data.get("varsta")
     data_nasterii_calc = None
     if varsta_input and str(varsta_input).isdigit():
