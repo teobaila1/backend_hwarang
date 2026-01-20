@@ -12,8 +12,7 @@ def run_migration():
     con = get_conn()
     cur = con.cursor()
 
-    # 1. DEBUG: Vedem mai întâi ce useri au date în coloana copii, indiferent de rol
-    # Căutăm orice rând unde coloana copii are mai mult de 2 caractere (adică nu e "[]" sau gol)
+    # 1. Căutăm utilizatorii cu date vechi
     cur.execute("""
         SELECT id, username, rol, copii 
         FROM utilizatori 
@@ -21,24 +20,16 @@ def run_migration():
     """)
     candidates = cur.fetchall()
 
-    debug_info = []
-    count = 0
-    errors = 0
-
     if not candidates:
-        return jsonify({
-            "status": "warning",
-            "message": "Nu am găsit niciun utilizator cu date în coloana veche 'copii'.",
-            "debug_query_result": "Empty"
-        })
+        return jsonify({"status": "warning", "message": "Nu am găsit date vechi de migrat."})
+
+    logs = []
+    total_inserted = 0
 
     for p in candidates:
         pid = p['id']
         username = p['username']
         raw_json = p['copii']
-        rol = p['rol']
-
-        debug_info.append(f"Gasit user: {username} ({rol}) | Data: {raw_json[:50]}...")
 
         try:
             # Parsare JSON
@@ -47,24 +38,25 @@ def run_migration():
             else:
                 children_list = raw_json
 
-            if not isinstance(children_list, list):
+            if not isinstance(children_list, list) or not children_list:
                 continue
+
+            # --- PASUL CRITIC: Curățăm datele existente ale acestui părinte ---
+            # Ștergem copiii din tabelul nou pentru a evita duplicatele și a forța re-scrierea
+            cur.execute("DELETE FROM copii WHERE id_parinte = %s", (pid,))
+
+            # Re-inserăm copiii curați
+            children_added_for_user = 0
 
             for child in children_list:
                 if not isinstance(child, dict): continue
 
                 nume = child.get('nume')
+                if not nume: continue
+
                 grupa = child.get('grupa')
                 gen = child.get('gen')
                 varsta = child.get('varsta')
-
-                if not nume: continue
-
-                # Verificăm duplicate în tabelul nou
-                cur.execute("SELECT 1 FROM copii WHERE id_parinte = %s AND nume = %s", (pid, nume))
-                if cur.fetchone():
-                    # Deja migrat
-                    continue
 
                 # Calcul Data Nașterii
                 dob = None
@@ -72,16 +64,18 @@ def run_migration():
                     an_curent = datetime.datetime.now().year
                     dob = f"{an_curent - int(varsta)}-01-01"
 
-                # INSERT COPII
                 new_id = uuid.uuid4().hex
+
+                # INSERT
                 cur.execute("""
                     INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
                     VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                 """, (new_id, pid, nume, gen, grupa, dob))
 
-                # INSERT GRUPE
+                # REPARĂM ȘI GRUPELE
                 if grupa:
                     g_norm = grupa.strip()
+                    # Căutăm ID grupă
                     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
                     g_row = cur.fetchone()
                     gid = None
@@ -91,20 +85,23 @@ def run_migration():
                         cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
                         gid = cur.fetchone()['id']
 
+                    # Ștergem asocieri vechi (dacă există orfane) și adăugăm
                     cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
                                 (gid, new_id))
 
-                count += 1
+                children_added_for_user += 1
+                total_inserted += 1
+
+            logs.append(f"User {username}: Stersi vechi -> Adaugati {children_added_for_user} noi.")
 
         except Exception as e:
-            errors += 1
-            debug_info.append(f"Eroare la {username}: {str(e)}")
+            logs.append(f"EROARE la {username}: {str(e)}")
             continue
 
     con.commit()
 
     return jsonify({
         "status": "success",
-        "mesaj": f"Migrare finalizata. Am mutat {count} copii.",
-        "detalii_utilizatori_gasiti": debug_info
+        "total_copii_rescrisi": total_inserted,
+        "detalii": logs
     })
