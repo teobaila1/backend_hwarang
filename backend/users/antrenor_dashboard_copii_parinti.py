@@ -1,11 +1,10 @@
 import json
 from datetime import datetime
 from flask import request, jsonify, Blueprint
-from ..accounts.decorators import token_required
-from ..config import get_conn
+from backend.accounts.decorators import token_required
+from backend.config import get_conn
 
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
-
 
 def _calculate_age(dob):
     if not dob: return 0
@@ -16,7 +15,6 @@ def _calculate_age(dob):
             return 0
     today = datetime.now()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-
 
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
 @token_required
@@ -30,7 +28,7 @@ def antrenor_dashboard_data():
     try:
         cur = con.cursor()
 
-        # 1. Găsim ID-ul antrenorului
+        # 1. Găsim ID-ul și rolul antrenorului
         cur.execute("SELECT id, rol FROM utilizatori WHERE username = %s", (trainer_username,))
         trainer_row = cur.fetchone()
         if not trainer_row:
@@ -39,11 +37,18 @@ def antrenor_dashboard_data():
         trainer_id = trainer_row['id']
         trainer_rol = trainer_row['rol'].lower()
 
-        # 2. Găsim grupele
+        # 2. Găsim grupele (LOGICA MULTI-ANTRENOR)
         if trainer_rol == 'admin':
             cur.execute("SELECT id, nume FROM grupe ORDER BY nume ASC")
         else:
-            cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s ORDER BY nume ASC", (trainer_id,))
+            # Căutăm în tabelul nou de legătură + compatibilitate veche
+            cur.execute("""
+                SELECT DISTINCT g.id, g.nume 
+                FROM grupe g
+                LEFT JOIN antrenori_pe_grupe ag ON g.id = ag.id_grupa
+                WHERE ag.id_antrenor = %s OR g.id_antrenor = %s
+                ORDER BY g.nume ASC
+            """, (trainer_id, trainer_id))
 
         grupe_rows = cur.fetchall()
 
@@ -111,7 +116,6 @@ def antrenor_dashboard_data():
                 })
 
             map_familii = {}
-
             for elev in lista_copii:
                 pid = elev["_parinte_info"]["id"]
                 if pid not in map_familii:
@@ -147,6 +151,3 @@ def antrenor_dashboard_data():
     except Exception as e:
         print(f"Eroare SQL Dashboard: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# AM ȘTERS FUNCȚIA duplicat 'copiii_mei' de aici.
-# Acum se va folosi doar cea corectă din parinti.py

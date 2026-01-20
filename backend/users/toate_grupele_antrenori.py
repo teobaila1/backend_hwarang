@@ -6,6 +6,7 @@ from backend.config import get_conn
 
 toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
 
+
 def _calculate_age(dob):
     if not dob: return 0
     if isinstance(dob, str):
@@ -16,6 +17,7 @@ def _calculate_age(dob):
     today = datetime.now()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
+
 @toate_grupele_antrenori_bp.get("/api/toate_grupele_antrenori")
 @token_required
 @admin_required
@@ -24,12 +26,8 @@ def toate_grupele_antrenori():
     try:
         cur = con.cursor()
 
-        # --- FIX 1: Selectăm antrenorii "Safe" (fără coloane explicite care pot lipsi) ---
-        # Nu folosim JOIN aici pentru a evita excluderea antrenorilor fără grupe
-        cur.execute("""
-            SELECT * FROM utilizatori 
-            WHERE LOWER(rol) IN ('antrenor', 'admin')
-        """)
+        # 1. Luăm toți antrenorii
+        cur.execute("SELECT * FROM utilizatori WHERE LOWER(rol) IN ('antrenor', 'admin')")
         potential_trainers = cur.fetchall()
 
         out = []
@@ -37,26 +35,34 @@ def toate_grupele_antrenori():
         for tr in potential_trainers:
             tid = tr['id']
             tname = tr['username']
-            # Folosim .get() pentru a nu primi eroare dacă 'nume_complet' lipsește din DB
             tdisplay = tr.get('nume_complet') or tname
 
-            # --- FIX 2: Căutăm grupele separat pentru acest antrenor ---
             grupe_list = []
             try:
-                cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s ORDER BY nume", (tid,))
+                # 2. Căutăm grupele în tabelul nou
+                cur.execute("""
+                    SELECT g.id, g.nume 
+                    FROM grupe g
+                    JOIN antrenori_pe_grupe ag ON g.id = ag.id_grupa
+                    WHERE ag.id_antrenor = %s
+                    ORDER BY g.nume
+                """, (tid,))
                 grupe = cur.fetchall()
-            except Exception as e:
-                print(f"[ERROR GRUPE] Nu am putut lua grupele pentru {tname}: {e}")
-                # Dacă dă eroare (ex: lipsește coloana id_antrenor), continuăm fără grupe, nu crăpăm tot
+
+                # Fallback pe metoda veche dacă tabelul e gol pentru acest user
+                if not grupe:
+                    cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s", (tid,))
+                    grupe = cur.fetchall()
+            except:
                 con.rollback()
+                cur = con.cursor()
                 grupe = []
-                cur = con.cursor() # Refacem cursorul după rollback
 
             for g in grupe:
                 gid = g['id']
                 gnume = g['nume']
 
-                # --- 3. Luăm Sportivii (Copii + Adulți) ---
+                # 3. Luăm sportivii
                 try:
                     cur.execute("""
                         SELECT c.id, c.nume, c.data_nasterii, c.gen, 'copil' as tip,
@@ -65,9 +71,7 @@ def toate_grupele_antrenori():
                         JOIN copii c ON sg.id_sportiv_copil = c.id
                         JOIN utilizatori u ON c.id_parinte = u.id
                         WHERE sg.id_grupa = %s
-
                         UNION ALL
-
                         SELECT CAST(u.id AS TEXT), COALESCE(u.nume_complet, u.username), u.data_nasterii, u.gen, 'sportiv' as tip,
                                u.username, u.nume_complet, u.email
                         FROM sportivi_pe_grupe sg
@@ -75,8 +79,7 @@ def toate_grupele_antrenori():
                         WHERE sg.id_grupa = %s
                     """, (gid, gid))
                     members = cur.fetchall()
-                except Exception as e_membri:
-                    print(f"[ERROR MEMBRI] {e_membri}")
+                except:
                     con.rollback()
                     cur = con.cursor()
                     members = []
@@ -85,7 +88,6 @@ def toate_grupele_antrenori():
                 for m in members:
                     is_sportiv = (m['tip'] == 'sportiv')
                     p_display = m.get('p_full') or m.get('p_user') or "Unknown"
-
                     copii_formatted.append({
                         "id": m['id'],
                         "nume": m['nume'],
@@ -100,13 +102,8 @@ def toate_grupele_antrenori():
                     })
 
                 copii_formatted.sort(key=lambda k: (k['nume'] or "").lower())
+                grupe_list.append({"grupa": gnume, "copii": copii_formatted})
 
-                grupe_list.append({
-                    "grupa": gnume,
-                    "copii": copii_formatted
-                })
-
-            # Adăugăm în listă doar dacă am găsit grupe (sau poți scoate if-ul dacă vrei să vezi și antrenorii fără grupe)
             if grupe_list:
                 out.append({
                     "antrenor": tname,
@@ -118,7 +115,6 @@ def toate_grupele_antrenori():
         return jsonify({"status": "success", "data": out}), 200
 
     except Exception as e:
-        print(f"[CRITICAL ERROR] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
