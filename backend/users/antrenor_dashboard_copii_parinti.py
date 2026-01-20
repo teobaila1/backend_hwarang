@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from flask import request, jsonify, Blueprint
 from backend.accounts.decorators import token_required
@@ -7,6 +8,7 @@ from backend.config import get_conn
 antrenor_dashboard_copii_parinti_bp = Blueprint("antrenor_dashboard_copii_parinti", __name__)
 
 
+# --- Helper Functions ---
 def _calculate_age(dob):
     if not dob: return 0
     if isinstance(dob, str):
@@ -18,7 +20,29 @@ def _calculate_age(dob):
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
-# --- RUTA 1: Citire Date Dashboard (existentă) ---
+def _normalize_group_name(g):
+    if not g: return ""
+    g = str(g).strip()
+    if g.isdigit():
+        return f"Grupa {g}"
+    if g.lower().startswith("gr") and any(c.isdigit() for c in g):
+        nums = re.findall(r'\d+', g)
+        if nums:
+            return f"Grupa {nums[0]}"
+    return g
+
+
+def _get_or_create_group_id(cur, group_name):
+    if not group_name: return None
+    g_norm = _normalize_group_name(group_name)
+    cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
+    row = cur.fetchone()
+    if row: return row['id']
+    cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
+    return cur.fetchone()['id']
+
+
+# --- RUTA 1: Citire Date Dashboard ---
 @antrenor_dashboard_copii_parinti_bp.post("/api/antrenor_dashboard_data")
 @token_required
 def antrenor_dashboard_data():
@@ -31,7 +55,7 @@ def antrenor_dashboard_data():
     try:
         cur = con.cursor()
 
-        # 1. Găsim ID-ul și rolul antrenorului
+        # 1. Identificăm antrenorul
         cur.execute("SELECT id, rol FROM utilizatori WHERE username = %s", (trainer_username,))
         trainer_row = cur.fetchone()
         if not trainer_row:
@@ -53,7 +77,6 @@ def antrenor_dashboard_data():
             """, (trainer_id, trainer_id))
 
         grupe_rows = cur.fetchall()
-
         if not grupe_rows:
             return jsonify({"status": "success", "date": []}), 200
 
@@ -64,7 +87,7 @@ def antrenor_dashboard_data():
             g_id = gr['id']
             g_nume = gr['nume']
 
-            # A. COPII
+            # A. Copii
             cur.execute("""
                 SELECT c.id, c.nume, c.data_nasterii, c.gen,
                        u.id as pid, u.username as puser, u.nume_complet as pfull, u.email as pemail
@@ -75,7 +98,7 @@ def antrenor_dashboard_data():
             """, (g_id,))
             kids_rows = cur.fetchall()
 
-            # B. ADULȚI
+            # B. Adulți
             cur.execute("""
                 SELECT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen, u.email
                 FROM sportivi_pe_grupe sg
@@ -141,7 +164,6 @@ def antrenor_dashboard_data():
                 })
 
         def group_key(item):
-            import re
             name = item['grupa']
             m = re.search(r"(\d+)", name or "")
             return (int(m.group(1)) if m else 9999, (name or "").lower())
@@ -157,7 +179,7 @@ def antrenor_dashboard_data():
         if con: con.close()
 
 
-# --- RUTA 2: Ștergere Elev (NOU ADĂUGATĂ) ---
+# --- RUTA 2: Ștergere Elev ---
 @antrenor_dashboard_copii_parinti_bp.delete("/api/elevi/<student_id>")
 @token_required
 def sterge_elev(student_id):
@@ -165,29 +187,102 @@ def sterge_elev(student_id):
     try:
         cur = con.cursor()
 
-        # 1. Încercăm să ștergem din tabelul 'copii' (dacă e copil)
-        # ID-urile copiilor sunt UUID-uri lungi (text)
+        # 1. Încercăm să ștergem din copii
         cur.execute("DELETE FROM copii WHERE id = %s", (student_id,))
         rows_deleted = cur.rowcount
 
-        # 2. Dacă nu s-a șters nimic, poate e un adult (User) scos din grupă
-        # Dacă e adult, NU îi ștergem contul, ci doar legătura din 'sportivi_pe_grupe'
+        # 2. Dacă nu, scoatem din grupă (adult)
         if rows_deleted == 0:
-            # Verificăm dacă e un ID numeric (adult) sau text
-            # Dar SQL-ul se descurcă cu cast automat de multe ori.
-            # Totuși, să fim siguri că ștergem doar legătura.
             cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (student_id,))
             rows_deleted = cur.rowcount
 
         if rows_deleted > 0:
             con.commit()
-            return jsonify({"status": "success", "message": "Elev șters cu succes."}), 200
+            return jsonify({"status": "success", "message": "Elev eliminat."}), 200
         else:
             return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
 
     except Exception as e:
         con.rollback()
-        print(f"[DELETE ERROR] {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if con: con.close()
+
+
+# --- RUTA 3: Actualizare Elev (NOU ADĂUGATĂ) ---
+@antrenor_dashboard_copii_parinti_bp.patch("/api/elevi/<student_id>")
+@token_required
+def editeaza_elev(student_id):
+    data = request.get_json(silent=True) or {}
+
+    nume = data.get("nume")
+    gen = data.get("gen")
+    varsta = data.get("varsta")
+    grupa_input = data.get("grupa")
+
+    con = get_conn()
+    try:
+        cur = con.cursor()
+
+        # 1. Calculăm data nașterii dacă s-a schimbat vârsta
+        data_nasterii_calc = None
+        if varsta and str(varsta).isdigit():
+            an_curent = datetime.now().year
+            an_nastere = an_curent - int(varsta)
+            data_nasterii_calc = f"{an_nastere}-01-01"
+
+        # 2. Pregătim numele grupei (normalizat)
+        grupa_noua = _normalize_group_name(grupa_input) if grupa_input else None
+
+        # 3. Actualizăm tabelul 'copii'
+        # Construim query dinamic pentru a nu suprascrie cu NULL valorile lipsă
+        fields = []
+        vals = []
+
+        if nume:
+            fields.append("nume = %s")
+            vals.append(nume)
+        if gen:
+            fields.append("gen = %s")
+            vals.append(gen)
+        if data_nasterii_calc:
+            fields.append("data_nasterii = %s")
+            vals.append(data_nasterii_calc)
+        if grupa_noua:
+            fields.append("grupa_text = %s")  # Actualizăm textul grupei
+            vals.append(grupa_noua)
+
+        if not fields:
+            return jsonify({"status": "success", "message": "Nimic de actualizat."}), 200
+
+        vals.append(student_id)
+        sql = f"UPDATE copii SET {', '.join(fields)} WHERE id = %s"
+
+        cur.execute(sql, tuple(vals))
+
+        if cur.rowcount == 0:
+            # Dacă nu e copil, poate e User (Adult). De regulă nu edităm Useri aici,
+            # dar putem întoarce o eroare explicită sau ignora.
+            return jsonify({"status": "error",
+                            "message": "Nu se pot edita conturile de utilizatori (adulți) din acest meniu."}), 404
+
+        # 4. Dacă s-a schimbat grupa, trebuie să mutăm copilul în noua grupă
+        if grupa_noua:
+            gid = _get_or_create_group_id(cur, grupa_noua)
+            if gid:
+                # Actualizăm legătura
+                cur.execute("UPDATE sportivi_pe_grupe SET id_grupa = %s WHERE id_sportiv_copil = %s", (gid, student_id))
+                # Dacă nu exista legătura înainte (caz rar), o creăm
+                if cur.rowcount == 0:
+                    cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
+                                (gid, student_id))
+
+        con.commit()
+        return jsonify({"status": "success", "message": "Elev actualizat cu succes."}), 200
+
+    except Exception as e:
+        con.rollback()
+        print(f"[EDIT ERROR] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
