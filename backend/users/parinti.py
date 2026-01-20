@@ -5,10 +5,12 @@ import datetime
 from datetime import date
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
-from ..accounts.decorators import token_required
+from backend.accounts.decorators import token_required
 
 parinti_bp = Blueprint("parinti", __name__)
 
+
+# --- HELPERS ---
 
 def _normalize_name(s):
     s = (s or "").strip()
@@ -119,6 +121,7 @@ def claim_parent_account():
         values.append(parent_id)
         cur.execute(f"UPDATE utilizatori SET {', '.join(fields)} WHERE id = %s", tuple(values))
 
+        # Migrare copii la claim
         if copii_noi and isinstance(copii_noi, list):
             for copil in copii_noi:
                 c_nume = _normalize_name(copil.get("nume"))
@@ -142,78 +145,24 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-import uuid
-import re
-import json
-import datetime
-from datetime import date
-from flask import Blueprint, request, jsonify
-from backend.config import get_conn
-from ..accounts.decorators import token_required
+# --- 3. COPIII MEI (Rutele de Dashboard) ---
 
-parinti_bp = Blueprint("parinti", __name__)
-
-
-def _normalize_name(s):
-    s = (s or "").strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def _new_claim_code():
-    return uuid.uuid4().hex[:8].upper()
-
-
-def _get_or_create_group_id(cur, group_name):
-    if not group_name: return None
-    g_norm = _normalize_name(group_name)
-    cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
-    row = cur.fetchone()
-    if row: return row['id']
-    cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
-    return cur.fetchone()['id']
-
-
-def _calc_age(dob):
-    """Calculează vârsta numerică."""
-    if not dob: return ""
-    try:
-        today = date.today()
-        if isinstance(dob, str):
-            dob = date.fromisoformat(dob)
-        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-    except:
-        return ""
-
-
-# --- RUTA DE PROBLEMĂ ---
 @parinti_bp.get("/api/copiii_mei")
 @token_required
 def get_my_children():
     user_id = request.user_id
 
-    # --- DEBUGGING START ---
+    # DEBUG
     print(f"\n[DEBUG COPII] User ID Logat: {user_id}")
-    # -----------------------
 
     con = get_conn()
     try:
         cur = con.cursor()
-
-        # Facem query-ul
         sql = "SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s"
         cur.execute(sql, (user_id,))
         rows = cur.fetchall()
 
-        # --- DEBUGGING REZULTATE ---
-        print(f"[DEBUG COPII] Query SQL: {sql}")
-        print(f"[DEBUG COPII] Copii gasiti in DB: {len(rows)}")
-        if len(rows) > 0:
-            print(f"[DEBUG COPII] Exemplu copil gasit: {rows[0]['nume']}")
-        else:
-            print(
-                f"[DEBUG COPII] LISTA E GOALĂ! Verifică dacă user_id din token corespunde cu id_parinte din tabelul copii.")
-        # ---------------------------
+        print(f"[DEBUG COPII] Gasiti: {len(rows)}")
 
         children = []
         for r in rows:
@@ -229,7 +178,7 @@ def get_my_children():
 
         return jsonify(children), 200
     except Exception as e:
-        print(f"[DEBUG ERROR] {str(e)}")
+        print(f"[ERROR COPII] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
@@ -260,7 +209,7 @@ def add_my_child():
         cur = con.cursor()
         new_id = uuid.uuid4().hex
 
-        print(f"[DEBUG ADD] Adaug copil pentru parintele: {user_id}")
+        print(f"[DEBUG ADD] Adaug copil pentru: {user_id}")
 
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
@@ -276,6 +225,7 @@ def add_my_child():
         return jsonify({"status": "success", "message": "Copil adăugat!"}), 200
     except Exception as e:
         con.rollback()
+        print(f"[ERROR ADD] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -293,9 +243,3 @@ def delete_my_child(child_id):
         return jsonify({"status": "success", "message": "Copil șters."}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# ... Restul funcțiilor (placeholder, claim) rămân neschimbate, le poți păstra pe cele din fișierul tău anterior ...
-# Adaugă aici funcțiile create_parent_placeholder și claim_parent_account din fișierul tău vechi pentru a fi complet.
-# (Din motive de spațiu le-am omis, dar ele trebuie să fie în fișier pentru a nu avea erori la import)
-# --- INSERT REST OF FUNCTIONS HERE ---
-# Copiază create_parent_placeholder și claim_parent_account din fișierul anterior.
