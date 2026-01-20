@@ -18,22 +18,42 @@ def _normalize_name(s):
     return s
 
 
-def _new_claim_code():
-    return uuid.uuid4().hex[:8].upper()
+# --- FUNCȚIE NOUĂ: Repară numele grupei (Ex: "1" -> "Grupa 1") ---
+def _normalize_group_name(g):
+    if not g: return ""
+    g = str(g).strip()
+
+    # 1. Dacă e doar număr (ex: "1", "2"), îl transformăm în "Grupa 1"
+    if g.isdigit():
+        return f"Grupa {g}"
+
+    # 2. Dacă scrie "gr 1" sau "gr.1", corectăm în "Grupa 1"
+    # (Optional, dar util)
+    if g.lower().startswith("gr") and any(c.isdigit() for c in g):
+        # Extragem doar numărul
+        nums = re.findall(r'\d+', g)
+        if nums:
+            return f"Grupa {nums[0]}"
+
+    # 3. Altfel, lăsăm numele așa cum e (ex: "Baby Hwarang", "Avansati")
+    return _normalize_name(g)
 
 
 def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
-    g_norm = _normalize_name(group_name)
+    # Aici folosim funcția de normalizare
+    g_norm = _normalize_group_name(group_name)
+
     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
     row = cur.fetchone()
     if row: return row['id']
+
+    # Dacă nu există, o creăm cu numele frumos ("Grupa 1")
     cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
     return cur.fetchone()['id']
 
 
 def _calc_age(dob):
-    """Calculează vârsta numerică."""
     if not dob: return ""
     try:
         today = date.today()
@@ -145,7 +165,7 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 1. RUTELE PENTRU COPIII MEI ---
+# --- RUTELE PENTRU COPIII MEI ---
 
 @parinti_bp.get("/api/copiii_mei")
 @token_required
@@ -183,29 +203,22 @@ def add_my_child():
     user_id = request.user_id
     data = request.get_json(silent=True) or {}
 
-    # --- DEBUG: Vedem ce trimite site-ul ---
     print(f"\n[DEBUG ADD CHILD] Date primite: {data}")
-    # ---------------------------------------
 
-    # Încercăm să ghicim câmpurile dacă au alte nume
     nume = (
             _normalize_name(data.get("nume")) or
             _normalize_name(data.get("nume_copil")) or
             _normalize_name(data.get("name"))
     )
 
-    grupa = (
-            _normalize_name(data.get("grupa")) or
-            _normalize_name(data.get("group"))
-    )
+    # AICI APLICĂM CORECȚIA AUTOMATĂ
+    raw_grupa = data.get("grupa") or data.get("group")
+    grupa = _normalize_group_name(raw_grupa)
 
     gen = data.get("gen") or data.get("gender")
-
     varsta_input = data.get("varsta") or data.get("age")
 
-    # Validare
     if not nume:
-        print(f"[DEBUG ERROR] Nume lipsa! Am primit: {data}")
         return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
 
     # Calcul data nașterii
@@ -220,18 +233,20 @@ def add_my_child():
         cur = con.cursor()
         new_id = uuid.uuid4().hex
 
+        # Inserăm copilul (salvăm numele grupei corectat, ex "Grupa 1")
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)
         """, (new_id, user_id, nume, gen, grupa, data_nasterii_calc))
 
+        # Facem legătura cu grupa din baza de date
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
             if gid:
                 cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)", (gid, new_id))
 
         con.commit()
-        return jsonify({"status": "success", "message": "Copil adăugat!"}), 200
+        return jsonify({"status": "success", "message": f"Copil adăugat în {grupa}!"}), 200
     except Exception as e:
         con.rollback()
         print(f"[SQL ERROR] {e}")
@@ -256,5 +271,3 @@ def delete_my_child(child_id):
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
-
-# --- Funcțiile Placeholder/Claim (opțional, le poți lăsa dacă le folosești) ---
