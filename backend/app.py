@@ -22,6 +22,8 @@ from backend.competitions.stergere_concurs import stergere_concurs_bp
 from backend.passwords.resetare_parola import resetare_bp
 from backend.users.parinti import parinti_bp
 from backend.users.elevi import elevi_bp
+
+from backend.migrare_copii import migrare_bp
 import os
 
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
@@ -34,6 +36,7 @@ CORS(app, resources={r"/api/*": {"origins": [
     "https://www.hwarang.ro"  # 👈 Adaugă neapărat varianta asta
 ]}})
 
+app.register_blueprint(migrare_bp)
 app.register_blueprint(inscriere_bp)
 app.register_blueprint(autentificare_bp)
 app.register_blueprint(inregistrare_bp)
