@@ -208,23 +208,21 @@ def add_my_child():
     user_id = request.user_id
     data = request.get_json(silent=True) or {}
 
-    print(f"\n[DEBUG ADD CHILD] Date primite: {data}")
-
-    nume = (
+    # 1. Normalizăm numele introdus (ștergem spații inutile)
+    nume_copil_input = (
             _normalize_name(data.get("nume")) or
             _normalize_name(data.get("nume_copil")) or
             _normalize_name(data.get("name"))
     )
 
-    # AICI APLICĂM CORECȚIA AUTOMATĂ
+    if not nume_copil_input:
+        return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
+
     raw_grupa = data.get("grupa") or data.get("group")
     grupa = _normalize_group_name(raw_grupa)
 
     gen = data.get("gen") or data.get("gender")
     varsta_input = data.get("varsta") or data.get("age")
-
-    if not nume:
-        return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
 
     # Calcul data nașterii
     data_nasterii_calc = None
@@ -236,22 +234,51 @@ def add_my_child():
     con = get_conn()
     try:
         cur = con.cursor()
+
+        # --- AUTO-COMPLETARE NUME FAMILIE ---
+        # Pas A: Luăm numele părintelui din baza de date
+        cur.execute("SELECT nume_complet FROM utilizatori WHERE id = %s", (user_id,))
+        p_row = cur.fetchone()
+
+        nume_final = nume_copil_input
+
+        if p_row and p_row['nume_complet']:
+            nume_parinte = _normalize_name(p_row['nume_complet'])
+
+            # Pas B: Verificăm dacă copilul are doar un cuvânt (nu are spații)
+            if " " not in nume_copil_input:
+                # Pas C: Extragem primul cuvânt din numele părintelui (Numele de Familie)
+                # Exemplu: "Popescu Maria" -> "Popescu"
+                parts = nume_parinte.split()
+                if len(parts) >= 1:
+                    nume_familie = parts[0]
+                    # Lipim Nume Familie + Prenume Copil
+                    nume_final = f"{nume_familie} {nume_copil_input}"
+                    print(f"[AUTO-NAME] Transformat '{nume_copil_input}' -> '{nume_final}' (Parinte: {nume_parinte})")
+
+        # ------------------------------------
+
         new_id = uuid.uuid4().hex
 
-        # Inserăm copilul (salvăm numele grupei corectat, ex "Grupa 1")
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)
-        """, (new_id, user_id, nume, gen, grupa, data_nasterii_calc))
+        """, (new_id, user_id, nume_final, gen, grupa, data_nasterii_calc))
 
-        # Facem legătura cu grupa din baza de date
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
             if gid:
                 cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)", (gid, new_id))
 
         con.commit()
-        return jsonify({"status": "success", "message": f"Copil adăugat în {grupa}!"}), 200
+
+        # Mesaj personalizat în funcție de ce am salvat
+        msg = f"Copil adăugat: {nume_final}"
+        if grupa:
+            msg += f" în {grupa}"
+
+        return jsonify({"status": "success", "message": msg}), 200
+
     except Exception as e:
         con.rollback()
         print(f"[SQL ERROR] {e}")
