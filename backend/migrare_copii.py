@@ -4,42 +4,51 @@ import datetime
 from flask import Blueprint, jsonify
 from backend.config import get_conn
 
-# Nu mai importăm decoratorii pentru că îi scoatem temporar
-# from backend.accounts.decorators import admin_required, token_required
-
 migrare_bp = Blueprint('migrare', __name__)
 
 
-# --- NOTĂ: Am scos securitatea (@token_required) ca să poți rula scriptul direct din browser ---
 @migrare_bp.get('/api/admin/migrare_fortata')
 def run_migration():
     con = get_conn()
     cur = con.cursor()
 
-    # 1. Luăm toți părinții care au date în coloana veche 'copii'
-    try:
-        cur.execute("SELECT id, copii FROM utilizatori WHERE rol = 'Parinte' AND copii IS NOT NULL")
-        parinti = cur.fetchall()
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Eroare SQL initiala: {str(e)}"}), 500
+    # 1. DEBUG: Vedem mai întâi ce useri au date în coloana copii, indiferent de rol
+    # Căutăm orice rând unde coloana copii are mai mult de 2 caractere (adică nu e "[]" sau gol)
+    cur.execute("""
+        SELECT id, username, rol, copii 
+        FROM utilizatori 
+        WHERE copii IS NOT NULL AND LENGTH(CAST(copii AS TEXT)) > 2
+    """)
+    candidates = cur.fetchall()
 
+    debug_info = []
     count = 0
     errors = 0
 
-    for p in parinti:
+    if not candidates:
+        return jsonify({
+            "status": "warning",
+            "message": "Nu am găsit niciun utilizator cu date în coloana veche 'copii'.",
+            "debug_query_result": "Empty"
+        })
+
+    for p in candidates:
         pid = p['id']
+        username = p['username']
         raw_json = p['copii']
+        rol = p['rol']
+
+        debug_info.append(f"Gasit user: {username} ({rol}) | Data: {raw_json[:50]}...")
 
         try:
-            if not raw_json: continue
-            # Uneori JSON-ul e stocat ciudat, încercăm să-l reparăm basic
+            # Parsare JSON
             if isinstance(raw_json, str):
                 children_list = json.loads(raw_json)
             else:
-                # Dacă e deja dict/list (unele drivere SQL fac conversia automat)
                 children_list = raw_json
 
-            if not isinstance(children_list, list): continue
+            if not isinstance(children_list, list):
+                continue
 
             for child in children_list:
                 if not isinstance(child, dict): continue
@@ -51,11 +60,13 @@ def run_migration():
 
                 if not nume: continue
 
-                # Verificăm dacă există deja în tabelul nou
+                # Verificăm duplicate în tabelul nou
                 cur.execute("SELECT 1 FROM copii WHERE id_parinte = %s AND nume = %s", (pid, nume))
-                if cur.fetchone(): continue
+                if cur.fetchone():
+                    # Deja migrat
+                    continue
 
-                # Calculăm data nașterii
+                # Calcul Data Nașterii
                 dob = None
                 if varsta and str(varsta).isdigit():
                     an_curent = datetime.datetime.now().year
@@ -68,10 +79,9 @@ def run_migration():
                     VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                 """, (new_id, pid, nume, gen, grupa, dob))
 
-                # INSERT GRUPE (Legătura pentru antrenor)
+                # INSERT GRUPE
                 if grupa:
                     g_norm = grupa.strip()
-                    # Căutăm grupa sau o creăm
                     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
                     g_row = cur.fetchone()
                     gid = None
@@ -81,19 +91,20 @@ def run_migration():
                         cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
                         gid = cur.fetchone()['id']
 
-                    # Legăm copilul de grupă
                     cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
                                 (gid, new_id))
 
                 count += 1
 
         except Exception as e:
-            print(f"Eroare la parintele ID {pid}: {e}")
             errors += 1
+            debug_info.append(f"Eroare la {username}: {str(e)}")
             continue
 
     con.commit()
+
     return jsonify({
         "status": "success",
-        "mesaj": f"EXECUTAT! Am mutat {count} copii. Erori intampinate: {errors}"
+        "mesaj": f"Migrare finalizata. Am mutat {count} copii.",
+        "detalii_utilizatori_gasiti": debug_info
     })
