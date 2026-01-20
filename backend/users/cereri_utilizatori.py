@@ -10,14 +10,19 @@ cereri_utilizatori_bp = Blueprint("cereri_utilizatori", __name__)
 
 
 def _ensure_column(con, table: str, column: str, sql_type: str = "TEXT"):
+    """Verifică dacă o coloană există. Dacă nu, o creează."""
     cur = con.cursor()
-    # Verificare simplă dacă există coloana
     try:
         cur.execute(f"SELECT {column} FROM {table} LIMIT 1")
     except:
         con.rollback()
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
-        con.commit()
+        # Adăugăm coloana lipsă
+        try:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}")
+            con.commit()
+            print(f"[AUTO-FIX] Adăugat coloana '{column}' în tabela '{table}'.")
+        except Exception as e:
+            print(f"[WARN] Nu am putut adăuga coloana {column}: {e}")
 
 
 def _normalize_name(s):
@@ -28,7 +33,6 @@ def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
     gn = _normalize_name(group_name)
 
-    # Logică normalizare rapidă (ex: "1" -> "Grupa 1")
     if gn.isdigit():
         gn = f"Grupa {gn}"
     elif gn.lower().startswith("gr") and any(c.isdigit() for c in gn):
@@ -48,12 +52,15 @@ def _get_or_create_group_id(cur, group_name):
 def get_cereri():
     try:
         con = get_conn()
-        cur = con.cursor()
 
-        # Ne asigurăm că există coloanele necesare
+        # --- AUTO-REPARARE TABELE ---
+        # Ne asigurăm că cereri_utilizatori are tot ce trebuie
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "cereri_utilizatori", "data_nasterii", "DATE")
+        _ensure_column(con, "cereri_utilizatori", "copii", "TEXT")
+        _ensure_column(con, "cereri_utilizatori", "grupe", "TEXT")
 
+        cur = con.cursor()
         cur.execute("""
             SELECT id, username, email, tip, varsta, data_nasterii, 
                    COALESCE(nume_complet, username) AS afisaj, grupe, copii 
@@ -64,7 +71,6 @@ def get_cereri():
 
         lista = []
         for r in cereri:
-            # Parsăm copiii pentru afișare corectă în frontend
             copii_parsed = []
             if r['copii']:
                 try:
@@ -96,6 +102,16 @@ def get_cereri():
 def accepta_cerere(cerere_id: int):
     try:
         con = get_conn()
+
+        # --- AUTO-REPARARE TABELA UTILIZATORI ---
+        # Aici rezolvăm problema: ne asigurăm că tabela 'utilizatori' are coloanele necesare
+        # Folosim 'parola' ca nume de bază (pentru compatibilitate), dar asigurăm restul
+        _ensure_column(con, "utilizatori", "nume_complet", "TEXT")
+        _ensure_column(con, "utilizatori", "data_nasterii", "DATE")
+        _ensure_column(con, "utilizatori", "grupe", "TEXT")
+        _ensure_column(con, "utilizatori", "copii", "TEXT")
+        # ----------------------------------------
+
         cur = con.cursor()
 
         # 1. Luăm datele cererii
@@ -107,9 +123,9 @@ def accepta_cerere(cerere_id: int):
 
         username = row["username"]
         email = row["email"]
-        parola = row["parola"]  # Hash-ul gata făcut din inregistrare.py
-        rol = row["tip"]  # 'tip' din cerere devine 'rol'
-        copii_json = row["copii"]  # JSON string
+        parola = row["parola"]
+        rol = row["tip"]
+        copii_json = row["copii"]
         grupe_str = row["grupe"]
         nume_complet = row.get("nume_complet") or username
         data_nasterii = row.get("data_nasterii")
@@ -119,17 +135,17 @@ def accepta_cerere(cerere_id: int):
         if cur.fetchone():
             return jsonify({"error": "Există deja un utilizator cu acest username/email"}), 409
 
-        # 3. Inserăm în UTILIZATORI (Aici intră în tabela principală)
-        # Atenție: folosim password_hash în DB, dar 'parola' din row deja e hashuită în inregistrare.py
+        # 3. Inserăm în UTILIZATORI (FIX: folosim 'parola' în loc de 'password_hash')
+        # Baza ta veche folosește coloana 'parola'.
         cur.execute("""
-            INSERT INTO utilizatori (username, password_hash, rol, email, grupe, copii, nume_complet, data_nasterii)
+            INSERT INTO utilizatori (username, parola, rol, email, grupe, copii, nume_complet, data_nasterii)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (username, parola, rol, email, grupe_str, copii_json, nume_complet, data_nasterii))
 
         new_user_id = cur.fetchone()['id']
 
-        # 4. (Opțional) Inserăm în ROLURI dacă folosești acea tabelă, dacă nu, e ok să fie comentat sau șters
+        # 4. Inserăm în ROLURI (Opțional)
         try:
             cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, %s)", (new_user_id, rol))
         except:
@@ -144,23 +160,20 @@ def accepta_cerere(cerere_id: int):
                         c_nume = c.get("nume")
                         c_grupa = c.get("grupa")
                         c_gen = c.get("gen")
-
-                        # Calculăm data nașterii copilului din vârstă (aproximativ)
                         c_varsta = c.get("varsta")
+
                         dn_copil = None
                         if c_varsta and str(c_varsta).isdigit():
-                            an_nastere = 2024 - int(c_varsta)  # Aproximare
+                            an_nastere = 2024 - int(c_varsta)
                             dn_copil = f"{an_nastere}-01-01"
 
                         if c_nume:
                             new_child_id = uuid.uuid4().hex
-                            # Insert în COPII
                             cur.execute("""
                                 INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
                                 VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                             """, (new_child_id, new_user_id, c_nume, c_gen, c_grupa, dn_copil))
 
-                            # Insert în SPORTIVI_PE_GRUPE (Copil)
                             if c_grupa:
                                 gid = _get_or_create_group_id(cur, c_grupa)
                                 if gid:
@@ -168,23 +181,21 @@ def accepta_cerere(cerere_id: int):
                                         "INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
                                         (gid, new_child_id))
             except Exception as ex:
-                print(f"[WARN] Eroare la migrarea copiilor din cerere: {ex}")
+                print(f"[WARN] Eroare la migrarea copiilor: {ex}")
 
         # 6. Procesăm SPORTIV (Adult) -> Legăm de grupă
-        # --- AICI ESTE FIXUL CERUT DE TINE ---
         if rol == 'Sportiv' and grupe_str:
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
             for g in gr_list:
                 gid = _get_or_create_group_id(cur, g)
                 if gid:
                     try:
-                        # Îl legăm ca adult (id_sportiv_user)
                         cur.execute("""
                             INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_user) 
                             VALUES (%s, %s)
                             ON CONFLICT DO NOTHING
                         """, (gid, new_user_id))
-                        print(f"[ACCEPT] Sportiv {username} legat de {g} (ID: {gid})")
+                        print(f"[ACCEPT] Sportiv {username} legat de {g}")
                     except Exception as e:
                         print(f"[ERROR] Nu am putut lega sportivul de grupă: {e}")
 
@@ -193,13 +204,11 @@ def accepta_cerere(cerere_id: int):
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
             for g in gr_list:
                 gid = _get_or_create_group_id(cur, g)
-                # Dacă ai tabela nouă antrenori_pe_grupe
                 try:
                     cur.execute(
                         "INSERT INTO antrenori_pe_grupe (id_grupa, id_antrenor) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                         (gid, new_user_id))
                 except:
-                    # Fallback pe vechea coloană
                     cur.execute("UPDATE grupe SET id_antrenor = %s WHERE id = %s", (new_user_id, gid))
 
         # 8. Ștergem cererea
