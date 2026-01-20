@@ -5,7 +5,7 @@ from backend.accounts.decorators import token_required, admin_required
 modifica_rol_bp = Blueprint('modifica_rol', __name__)
 
 
-@modifica_rol_bp.patch('/api/admin/modifica_rol')
+@modifica_rol_bp.patch('/api/modifica_rol')
 @token_required
 @admin_required
 def modifica_rol():
