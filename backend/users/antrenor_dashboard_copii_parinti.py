@@ -39,7 +39,8 @@ def antrenor_dashboard_data():
         trainer_id = trainer_row['id']
         trainer_rol = trainer_row['rol'].lower()
 
-        # 2. Găsim grupele
+        # 2. Găsim grupele gestionate de acest antrenor
+        # Dacă e ADMIN, le vede pe toate. Dacă e ANTRENOR, doar pe ale lui.
         if trainer_rol == 'admin':
             cur.execute("SELECT id, nume FROM grupe ORDER BY nume ASC")
         else:
@@ -52,7 +53,7 @@ def antrenor_dashboard_data():
 
         results = []
 
-        # 3. Procesăm sportivii
+        # 3. Pentru fiecare grupă, luăm sportivii (copii + adulți)
         for gr in grupe_rows:
             g_id = gr['id']
             g_nume = gr['nume']
@@ -68,7 +69,7 @@ def antrenor_dashboard_data():
             """, (g_id,))
             kids_rows = cur.fetchall()
 
-            # B. ADULȚI
+            # B. SPORTIVI ADULȚI
             cur.execute("""
                 SELECT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen, u.email
                 FROM sportivi_pe_grupe sg
@@ -77,11 +78,13 @@ def antrenor_dashboard_data():
             """, (g_id,))
             adults_rows = cur.fetchall()
 
+            # Procesăm lista combinată
             lista_copii = []
 
+            # Adăugăm Copiii
             for k in kids_rows:
                 lista_copii.append({
-                    "id": k['id'],
+                    "id": k['id'],  # UUID string
                     "nume": k['nume'],
                     "varsta": _calculate_age(k['data_nasterii']),
                     "gen": k['gen'] or "—",
@@ -94,10 +97,11 @@ def antrenor_dashboard_data():
                     }
                 })
 
+            # Adăugăm Adulții
             for a in adults_rows:
                 display_name = a['nume_complet'] or a['username']
                 lista_copii.append({
-                    "id": str(a['id']),
+                    "id": str(a['id']),  # ID numeric convertit la string
                     "nume": display_name,
                     "varsta": _calculate_age(a['data_nasterii']),
                     "gen": a['gen'] or "—",
@@ -110,6 +114,11 @@ def antrenor_dashboard_data():
                     }
                 })
 
+            # Grupăm după "Părinte" pentru afișare (Așa cere frontend-ul vechi)
+            # Frontend-ul se așteaptă la {grupa: "X", parinte: {...}, copii: [...]}
+            # Trebuie să regrupăm lista plată de mai sus.
+
+            # Mapare: ParinteID -> {info_parinte, lista_copii}
             map_familii = {}
 
             for elev in lista_copii:
@@ -124,9 +133,11 @@ def antrenor_dashboard_data():
                         },
                         "copii": []
                     }
+                # Curățăm obiectul elev de cheia _parinte_info ca să nu o trimitem dublu
                 clean_elev = {k: v for k, v in elev.items() if k != "_parinte_info"}
                 map_familii[pid]["copii"].append(clean_elev)
 
+            # Construim rezultatul final pentru această grupă
             for pid, val in map_familii.items():
                 results.append({
                     "grupa": g_nume,
@@ -134,6 +145,7 @@ def antrenor_dashboard_data():
                     "copii": val["copii"]
                 })
 
+        # Sortare finală
         def group_key(item):
             import re
             name = item['grupa']
@@ -148,5 +160,39 @@ def antrenor_dashboard_data():
         print(f"Eroare SQL Dashboard: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# AM ȘTERS FUNCȚIA duplicat 'copiii_mei' de aici.
-# Acum se va folosi doar cea corectă din parinti.py
+
+# Endpoint auxiliar pentru părinți (rămâne compatibil)
+@antrenor_dashboard_copii_parinti_bp.route("/api/copiii_mei", methods=["POST"])
+@token_required
+def copiii_mei():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username")
+    if not username: return jsonify({"status": "error"}), 400
+
+    con = get_conn()
+    try:
+        cur = con.cursor()
+        # Luăm ID părinte
+        cur.execute("SELECT id FROM utilizatori WHERE username = %s", (username,))
+        p_row = cur.fetchone()
+        if not p_row: return jsonify({"status": "error", "message": "User not found"}), 404
+
+        pid = p_row['id']
+
+        # Luăm copiii din tabelul COPII
+        cur.execute("SELECT id, nume, data_nasterii, gen, grupa_text FROM copii WHERE id_parinte = %s", (pid,))
+        rows = cur.fetchall()
+
+        copii_list = []
+        for r in rows:
+            copii_list.append({
+                "id": r['id'],
+                "nume": r['nume'],
+                "varsta": _calculate_age(r['data_nasterii']),
+                "gen": r['gen'],
+                "grupa": r['grupa_text']  # Sau facem JOIN cu grupe dacă vrem numele oficial
+            })
+
+        return jsonify({"status": "success", "copii": copii_list})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
