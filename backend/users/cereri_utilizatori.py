@@ -10,17 +10,14 @@ cereri_utilizatori_bp = Blueprint("cereri_utilizatori", __name__)
 
 
 def _ensure_column(con, table: str, column: str, sql_type: str = "TEXT"):
-    """Verifică dacă o coloană există. Dacă nu, o creează."""
     cur = con.cursor()
     try:
         cur.execute(f"SELECT {column} FROM {table} LIMIT 1")
     except:
         con.rollback()
-        # Adăugăm coloana lipsă
         try:
             cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}")
             con.commit()
-            print(f"[AUTO-FIX] Adăugat coloana '{column}' în tabela '{table}'.")
         except Exception as e:
             print(f"[WARN] Nu am putut adăuga coloana {column}: {e}")
 
@@ -33,6 +30,7 @@ def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
     gn = _normalize_name(group_name)
 
+    # Normalizare rapidă (ex: "1" -> "Grupa 1")
     if gn.isdigit():
         gn = f"Grupa {gn}"
     elif gn.lower().startswith("gr") and any(c.isdigit() for c in gn):
@@ -53,8 +51,7 @@ def get_cereri():
     try:
         con = get_conn()
 
-        # --- AUTO-REPARARE TABELE ---
-        # Ne asigurăm că cereri_utilizatori are tot ce trebuie
+        # Asigurăm coloanele necesare în tabela temporară
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "cereri_utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "cereri_utilizatori", "copii", "TEXT")
@@ -103,14 +100,11 @@ def accepta_cerere(cerere_id: int):
     try:
         con = get_conn()
 
-        # --- AUTO-REPARARE TABELA UTILIZATORI ---
-        # Aici rezolvăm problema: ne asigurăm că tabela 'utilizatori' are coloanele necesare
-        # Folosim 'parola' ca nume de bază (pentru compatibilitate), dar asigurăm restul
+        # Asigurăm coloanele în tabela finală UTILIZATORI
         _ensure_column(con, "utilizatori", "nume_complet", "TEXT")
         _ensure_column(con, "utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "utilizatori", "grupe", "TEXT")
         _ensure_column(con, "utilizatori", "copii", "TEXT")
-        # ----------------------------------------
 
         cur = con.cursor()
 
@@ -135,8 +129,8 @@ def accepta_cerere(cerere_id: int):
         if cur.fetchone():
             return jsonify({"error": "Există deja un utilizator cu acest username/email"}), 409
 
-        # 3. Inserăm în UTILIZATORI (FIX: folosim 'parola' în loc de 'password_hash')
-        # Baza ta veche folosește coloana 'parola'.
+        # 3. Inserăm în UTILIZATORI
+        # FIX: Folosim 'parola' (cum ai tu în bază) în loc de 'password_hash'
         cur.execute("""
             INSERT INTO utilizatori (username, parola, rol, email, grupe, copii, nume_complet, data_nasterii)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -145,7 +139,7 @@ def accepta_cerere(cerere_id: int):
 
         new_user_id = cur.fetchone()['id']
 
-        # 4. Inserăm în ROLURI (Opțional)
+        # 4. Inserăm în ROLURI (Dacă tabela există)
         try:
             cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, %s)", (new_user_id, rol))
         except:
@@ -169,11 +163,13 @@ def accepta_cerere(cerere_id: int):
 
                         if c_nume:
                             new_child_id = uuid.uuid4().hex
+                            # Creăm copilul
                             cur.execute("""
                                 INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
                                 VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                             """, (new_child_id, new_user_id, c_nume, c_gen, c_grupa, dn_copil))
 
+                            # Îl legăm de grupă
                             if c_grupa:
                                 gid = _get_or_create_group_id(cur, c_grupa)
                                 if gid:
@@ -183,19 +179,22 @@ def accepta_cerere(cerere_id: int):
             except Exception as ex:
                 print(f"[WARN] Eroare la migrarea copiilor: {ex}")
 
-        # 6. Procesăm SPORTIV (Adult) -> Legăm de grupă
+        # --- FIXUL CERUT: Procesăm SPORTIV (Adult) ---
         if rol == 'Sportiv' and grupe_str:
+            # Spargem stringul "Grupa 1, Grupa 2" în listă
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
+
             for g in gr_list:
                 gid = _get_or_create_group_id(cur, g)
                 if gid:
                     try:
+                        # Îl legăm de grupă ca ADULT (id_sportiv_user)
                         cur.execute("""
                             INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_user) 
                             VALUES (%s, %s)
                             ON CONFLICT DO NOTHING
                         """, (gid, new_user_id))
-                        print(f"[ACCEPT] Sportiv {username} legat de {g}")
+                        print(f"[ACCEPT] Sportiv {username} legat de {g} (ID Grupa: {gid})")
                     except Exception as e:
                         print(f"[ERROR] Nu am putut lega sportivul de grupă: {e}")
 
