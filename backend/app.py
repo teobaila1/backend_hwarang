@@ -24,6 +24,7 @@ from backend.users.parinti import parinti_bp
 from backend.users.elevi import elevi_bp
 
 from backend.migrare_copii import migrare_bp
+from backend.users.reparare_copii import reparare_copii_bp
 import os
 
 SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
@@ -59,6 +60,6 @@ app.register_blueprint(stergere_concurs_bp)
 app.register_blueprint(resetare_bp)
 app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
-
+app.register_blueprint(reparare_copii_bp)
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
