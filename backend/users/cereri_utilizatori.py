@@ -26,16 +26,28 @@ def _normalize_name(s):
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
+# --- FUNCȚIE NOUĂ DE CURĂȚARE GRUPĂ ---
+def _normalize_group_name(g):
+    if not g: return ""
+    g = str(g).strip()
+
+    # "1" -> "Grupa 1"
+    if g.isdigit():
+        return f"Grupa {g}"
+
+    # "gr 1", "Gr.1" -> "Grupa 1"
+    if g.lower().startswith("gr") and any(c.isdigit() for c in g):
+        nums = re.findall(r'\d+', g)
+        if nums: return f"Grupa {nums[0]}"
+
+    # Altfel returnăm textul curat (ex: "Baby Hwarang")
+    return _normalize_name(g)
+
+
 def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
-    gn = _normalize_name(group_name)
-
-    # Normalizare rapidă (ex: "1" -> "Grupa 1")
-    if gn.isdigit():
-        gn = f"Grupa {gn}"
-    elif gn.lower().startswith("gr") and any(c.isdigit() for c in gn):
-        nums = re.findall(r'\d+', gn)
-        if nums: gn = f"Grupa {nums[0]}"
+    # Folosim funcția de normalizare aici
+    gn = _normalize_group_name(group_name)
 
     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (gn,))
     row = cur.fetchone()
@@ -51,7 +63,7 @@ def get_cereri():
     try:
         con = get_conn()
 
-        # Asigurăm coloanele necesare în tabela temporară
+        # Asigurăm coloanele
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "cereri_utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "cereri_utilizatori", "copii", "TEXT")
@@ -100,7 +112,7 @@ def accepta_cerere(cerere_id: int):
     try:
         con = get_conn()
 
-        # Asigurăm coloanele în tabela finală UTILIZATORI
+        # Asigurăm coloanele în tabela finală
         _ensure_column(con, "utilizatori", "nume_complet", "TEXT")
         _ensure_column(con, "utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "utilizatori", "grupe", "TEXT")
@@ -130,7 +142,6 @@ def accepta_cerere(cerere_id: int):
             return jsonify({"error": "Există deja un utilizator cu acest username/email"}), 409
 
         # 3. Inserăm în UTILIZATORI
-        # FIX: Folosim 'parola' (cum ai tu în bază) în loc de 'password_hash'
         cur.execute("""
             INSERT INTO utilizatori (username, parola, rol, email, grupe, copii, nume_complet, data_nasterii)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -139,7 +150,7 @@ def accepta_cerere(cerere_id: int):
 
         new_user_id = cur.fetchone()['id']
 
-        # 4. Inserăm în ROLURI (Dacă tabela există)
+        # 4. Inserăm în ROLURI
         try:
             cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, %s)", (new_user_id, rol))
         except:
@@ -152,26 +163,40 @@ def accepta_cerere(cerere_id: int):
                 if isinstance(copii_list, list):
                     for c in copii_list:
                         c_nume = c.get("nume")
-                        c_grupa = c.get("grupa")
+                        c_grupa_raw = c.get("grupa")  # Ce a scris părintele (ex: "1")
                         c_gen = c.get("gen")
                         c_varsta = c.get("varsta")
 
+                        # A. Normalizare Nume Grupă ("1" -> "Grupa 1")
+                        c_grupa_final = _normalize_group_name(c_grupa_raw)
+
+                        # B. Auto-completare Nume Familie Copil
+                        if c_nume and " " not in c_nume.strip():
+                            if nume_complet:
+                                parts_parinte = _normalize_name(nume_complet).split()
+                                if len(parts_parinte) > 0:
+                                    nume_fam = parts_parinte[0]
+                                    c_nume = f"{nume_fam} {c_nume}"
+                                    print(f"[AUTO-NAME] Completat: {c_nume}")
+
+                        # C. Calcul Data Nașterii
                         dn_copil = None
                         if c_varsta and str(c_varsta).isdigit():
                             an_nastere = 2024 - int(c_varsta)
                             dn_copil = f"{an_nastere}-01-01"
 
+                        # D. Inserare
                         if c_nume:
                             new_child_id = uuid.uuid4().hex
-                            # Creăm copilul
+                            # Inserăm în COPII folosind numele de grupă FRUMOS (c_grupa_final)
                             cur.execute("""
                                 INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
                                 VALUES (%s, %s, %s, %s, %s, %s, FALSE)
-                            """, (new_child_id, new_user_id, c_nume, c_gen, c_grupa, dn_copil))
+                            """, (new_child_id, new_user_id, c_nume, c_gen, c_grupa_final, dn_copil))
 
-                            # Îl legăm de grupă
-                            if c_grupa:
-                                gid = _get_or_create_group_id(cur, c_grupa)
+                            # Facem legătura
+                            if c_grupa_final:
+                                gid = _get_or_create_group_id(cur, c_grupa_final)
                                 if gid:
                                     cur.execute(
                                         "INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
@@ -179,30 +204,30 @@ def accepta_cerere(cerere_id: int):
             except Exception as ex:
                 print(f"[WARN] Eroare la migrarea copiilor: {ex}")
 
-        # --- FIXUL CERUT: Procesăm SPORTIV (Adult) ---
+        # 6. Procesăm SPORTIV (Adult)
         if rol == 'Sportiv' and grupe_str:
-            # Spargem stringul "Grupa 1, Grupa 2" în listă
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
+            for g_raw in gr_list:
+                # Normalizăm și aici, just in case
+                g_final = _normalize_group_name(g_raw)
 
-            for g in gr_list:
-                gid = _get_or_create_group_id(cur, g)
+                gid = _get_or_create_group_id(cur, g_final)
                 if gid:
                     try:
-                        # Îl legăm de grupă ca ADULT (id_sportiv_user)
                         cur.execute("""
                             INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_user) 
                             VALUES (%s, %s)
                             ON CONFLICT DO NOTHING
                         """, (gid, new_user_id))
-                        print(f"[ACCEPT] Sportiv {username} legat de {g} (ID Grupa: {gid})")
                     except Exception as e:
                         print(f"[ERROR] Nu am putut lega sportivul de grupă: {e}")
 
         # 7. Procesăm ANTRENOR
         if rol == 'Antrenor' and grupe_str:
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
-            for g in gr_list:
-                gid = _get_or_create_group_id(cur, g)
+            for g_raw in gr_list:
+                g_final = _normalize_group_name(g_raw)
+                gid = _get_or_create_group_id(cur, g_final)
                 try:
                     cur.execute(
                         "INSERT INTO antrenori_pe_grupe (id_grupa, id_antrenor) VALUES (%s, %s) ON CONFLICT DO NOTHING",
