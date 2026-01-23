@@ -55,17 +55,16 @@ def antrenor_dashboard_data():
     try:
         cur = con.cursor()
 
-        # 1. Identificăm antrenorul (ID-ul e important)
+        # 1. Identificăm antrenorul
         cur.execute("SELECT id, rol FROM utilizatori WHERE username = %s", (trainer_username,))
         trainer_row = cur.fetchone()
         if not trainer_row:
             return jsonify({"status": "success", "date": []}), 200
 
         trainer_id = trainer_row['id']
-        # trainer_rol nu mai contează aici, vrem să filtrăm strict după ID
 
-        # 2. Găsim grupele (MODIFICAT: ACUM FILTRĂM PENTRU TOATĂ LUMEA)
-        # Indiferent dacă e Admin sau Antrenor, arătăm doar grupele asignate lui.
+        # 2. Găsim grupele asignate antrenorului
+        # Folosim LEFT JOIN ca să vedem grupele chiar dacă tabela de legătură e goală (caz rar)
         cur.execute("""
             SELECT DISTINCT g.id, g.nume 
             FROM grupe g
@@ -85,13 +84,15 @@ def antrenor_dashboard_data():
             g_id = gr['id']
             g_nume = gr['nume']
 
-            # A. Copii
+            # --- MODIFICAREA SALVATOARE PENTRU ERIC ---
+            # Folosim LEFT JOIN la utilizatori (părinți).
+            # Astfel, dacă legătura cu părintele e stricată, copilul tot apare!
             cur.execute("""
                 SELECT c.id, c.nume, c.data_nasterii, c.gen,
                        u.id as pid, u.username as puser, u.nume_complet as pfull, u.email as pemail
                 FROM sportivi_pe_grupe sg
                 JOIN copii c ON sg.id_sportiv_copil = c.id
-                JOIN utilizatori u ON c.id_parinte = u.id
+                LEFT JOIN utilizatori u ON c.id_parinte = u.id
                 WHERE sg.id_grupa = %s
             """, (g_id,))
             kids_rows = cur.fetchall()
@@ -108,6 +109,11 @@ def antrenor_dashboard_data():
             lista_copii = []
 
             for k in kids_rows:
+                # Dacă părintele nu e găsit (din cauza LEFT JOIN), punem placeholder
+                pid = k['pid'] or "unknown"
+                p_display = k['pfull'] or k['puser'] or "⚠ Părinte Lipsă/Șters"
+                p_email = k['pemail'] or ""
+
                 lista_copii.append({
                     "id": k['id'],
                     "nume": k['nume'],
@@ -116,9 +122,9 @@ def antrenor_dashboard_data():
                     "grupa": g_nume,
                     "tip": "copil",
                     "_parinte_info": {
-                        "id": k['pid'],
-                        "display": k['pfull'] or k['puser'],
-                        "email": k['pemail']
+                        "id": pid,
+                        "display": p_display,
+                        "email": p_email
                     }
                 })
 
@@ -138,9 +144,15 @@ def antrenor_dashboard_data():
                     }
                 })
 
+            # Grupăm vizual pe familii
             map_familii = {}
             for elev in lista_copii:
                 pid = elev["_parinte_info"]["id"]
+
+                # Hack: Dacă părintele e unknown, folosim ID-ul copilului ca să nu-i grupăm pe toți orfanii la un loc
+                if pid == "unknown":
+                    pid = f"orph_{elev['id']}"
+
                 if pid not in map_familii:
                     map_familii[pid] = {
                         "parinte": {
