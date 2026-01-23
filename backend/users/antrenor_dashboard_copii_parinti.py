@@ -64,7 +64,6 @@ def antrenor_dashboard_data():
         trainer_id = trainer_row['id']
 
         # 2. Găsim grupele asignate antrenorului
-        # Folosim LEFT JOIN ca să vedem grupele chiar dacă tabela de legătură e goală (caz rar)
         cur.execute("""
             SELECT DISTINCT g.id, g.nume 
             FROM grupe g
@@ -84,11 +83,9 @@ def antrenor_dashboard_data():
             g_id = gr['id']
             g_nume = gr['nume']
 
-            # --- MODIFICAREA SALVATOARE PENTRU ERIC ---
-            # Folosim LEFT JOIN la utilizatori (părinți).
-            # Astfel, dacă legătura cu părintele e stricată, copilul tot apare!
+            # A. COPII - Folosim DISTINCT ca să nu apară de 2 ori
             cur.execute("""
-                SELECT c.id, c.nume, c.data_nasterii, c.gen,
+                SELECT DISTINCT c.id, c.nume, c.data_nasterii, c.gen,
                        u.id as pid, u.username as puser, u.nume_complet as pfull, u.email as pemail
                 FROM sportivi_pe_grupe sg
                 JOIN copii c ON sg.id_sportiv_copil = c.id
@@ -97,9 +94,9 @@ def antrenor_dashboard_data():
             """, (g_id,))
             kids_rows = cur.fetchall()
 
-            # B. Adulți
+            # B. ADULȚI - Folosim DISTINCT
             cur.execute("""
-                SELECT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen, u.email
+                SELECT DISTINCT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen, u.email
                 FROM sportivi_pe_grupe sg
                 JOIN utilizatori u ON sg.id_sportiv_user = u.id
                 WHERE sg.id_grupa = %s
@@ -109,7 +106,7 @@ def antrenor_dashboard_data():
             lista_copii = []
 
             for k in kids_rows:
-                # Dacă părintele nu e găsit (din cauza LEFT JOIN), punem placeholder
+                # Fallback pt părinte lipsă
                 pid = k['pid'] or "unknown"
                 p_display = k['pfull'] or k['puser'] or "⚠ Părinte Lipsă/Șters"
                 p_email = k['pemail'] or ""
@@ -148,10 +145,7 @@ def antrenor_dashboard_data():
             map_familii = {}
             for elev in lista_copii:
                 pid = elev["_parinte_info"]["id"]
-
-                # Hack: Dacă părintele e unknown, folosim ID-ul copilului ca să nu-i grupăm pe toți orfanii la un loc
-                if pid == "unknown":
-                    pid = f"orph_{elev['id']}"
+                if pid == "unknown": pid = f"orph_{elev['id']}"
 
                 if pid not in map_familii:
                     map_familii[pid] = {

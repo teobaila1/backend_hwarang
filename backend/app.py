@@ -7,6 +7,7 @@ from backend.competitions.adauga_concurs import adauga_concurs_bp
 from backend.mails.evidenta_plati import evidenta_plati_bp
 from backend.competitions.numar_inscrisi import numar_inscrisi_bp
 from backend.competitions.creare_get_concurs import creare_get_concurs_bp
+from backend.users.sterge_duplicate import sterge_duplicate_bp
 from backend.users.toti_copiii_parintilor import toti_copiii_parintilor_bp
 from backend.users.toate_grupele_antrenori import toate_grupele_antrenori_bp
 from backend.competitions.inscrieri_concursuri_toti import inscriere_concurs_toti_bp
@@ -61,5 +62,6 @@ app.register_blueprint(resetare_bp)
 app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
 app.register_blueprint(reparare_copii_bp)
+app.register_blueprint(sterge_duplicate_bp)
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
