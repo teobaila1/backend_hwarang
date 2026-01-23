@@ -12,10 +12,10 @@ def get_my_registrations():
     user_id = request.user_id
     con = get_conn()
     try:
-        # Folosim RealDictCursor ca sa fim SIGURI ca primim {"nume": "Ion", ...} si nu (1, "Ion", ...)
+        # Folosim RealDictCursor pentru a accesa coloanele prin nume
         cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # 1. Aflăm cine face cererea
+        # 1. Identificăm utilizatorul
         cur.execute("SELECT username, email, rol, nume_complet FROM utilizatori WHERE id = %s", (user_id,))
         user = cur.fetchone()
 
@@ -29,9 +29,9 @@ def get_my_registrations():
 
         results = []
 
-        # --- LOGICA PENTRU PĂRINȚI ---
+        # 2. Construim Query-ul în funcție de rol
         if rol == 'Parinte':
-            # Găsim copiii
+            # Găsim copiii părintelui
             cur.execute("SELECT nume FROM copii WHERE id_parinte = %s", (user_id,))
             kids_rows = cur.fetchall()
 
@@ -39,34 +39,35 @@ def get_my_registrations():
 
             if nume_copii:
                 placeholders = ','.join(['%s'] * len(nume_copii))
-                # ATENTIE: Am scos 'created_at' momentan pentru a evita erori daca coloana nu exista
-                # Daca tabela ta are coloana 'data_inscriere' in loc de 'created_at', modifica mai jos
+                # Selectăm explicit created_at
                 sql = f"""
-                    SELECT id, concurs, nume, categorie_varsta, probe
+                    SELECT id, concurs, nume, categorie_varsta, probe, created_at
                     FROM inscrieri_concursuri 
                     WHERE nume IN ({placeholders})
+                    ORDER BY created_at DESC
                 """
                 cur.execute(sql, tuple(nume_copii))
                 results = cur.fetchall()
 
-        # --- LOGICA PENTRU SPORTIVI ---
         else:
+            # Logică pentru Sportiv (vede doar înscrierile lui)
             cur.execute("""
-                SELECT id, concurs, nume, categorie_varsta, probe
+                SELECT id, concurs, nume, categorie_varsta, probe, created_at
                 FROM inscrieri_concursuri 
                 WHERE LOWER(username) = LOWER(%s) 
                    OR LOWER(email) = LOWER(%s)
                    OR LOWER(nume) = LOWER(%s)
+                ORDER BY created_at DESC
             """, (username, email, nume_complet))
             results = cur.fetchall()
 
-        # Formatăm datele
+        # 3. Formatăm datele pentru Frontend
         data = []
         for r in results:
-            # Încercăm să luăm data, dacă există coloana created_at sau data_inscriere, altfel punem azi
+            # Formatare dată: YYYY-MM-DD (ex: 2024-05-20)
             data_add = "N/A"
-            if 'created_at' in r and r['created_at']:
-                data_add = str(r['created_at'].strftime('%Y-%m-%d'))
+            if r.get('created_at'):
+                data_add = r['created_at'].strftime('%Y-%m-%d')
 
             data.append({
                 "id": r['id'],
@@ -80,7 +81,6 @@ def get_my_registrations():
         return jsonify({"status": "success", "data": data}), 200
 
     except Exception as e:
-        # AICI ESTE CHEIA: Printam eroarea in consola serverului ca sa vedem ce are
         print(f"!!!!!!!! EROARE SERVER INSCRIERI: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
