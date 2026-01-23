@@ -48,6 +48,14 @@ def inscriere_concurs():
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
         email = row["email"]
 
+
+        # === ADAUGĂ ACEASTĂ VERIFICARE ===
+        cur.execute("SELECT inscrieri_deschise FROM concursuri WHERE nume = %s", (concurs_nume,))
+        status_row = cur.fetchone()
+        if status_row and status_row['inscrieri_deschise'] is False:
+            return jsonify({"status": "error", "message": "Înscrierile sunt ÎNCHISE pentru acest concurs."}), 403
+
+
         # 5. Verificăm dacă e deja înscris la acest concurs (Prevenire duplicate)
         cur.execute("""
             SELECT id FROM inscrieri_concursuri 

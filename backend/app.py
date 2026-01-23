@@ -1,6 +1,7 @@
 from flask import Flask
 from flask_cors import CORS
 from backend.accounts.autentificare import autentificare_bp
+from backend.competitions.stare_concurs import stare_concurs_bp
 from backend.users.antrenori_externi import antrenori_externi_bp
 from backend.users.antrenor_dashboard_copii_parinti import antrenor_dashboard_copii_parinti_bp
 from backend.competitions.adauga_concurs import adauga_concurs_bp
@@ -65,7 +66,9 @@ app.register_blueprint(parinti_bp)
 app.register_blueprint(elevi_bp)
 # app.register_blueprint(reparare_copii_bp)
 app.register_blueprint(sterge_duplicate_bp)
+app.register_blueprint(stare_concurs_bp)
 # app.register_blueprint(adaugare_fortata_bp)
+
 app.register_blueprint(inscrierile_mele_bp)
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)

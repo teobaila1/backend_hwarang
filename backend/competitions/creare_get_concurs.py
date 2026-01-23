@@ -62,22 +62,17 @@ def extract_data_start(perioada: str):
 
 @creare_get_concurs_bp.get('/api/concursuri')
 def get_concursuri():
-    """
-    Returnează lista concursurilor:
-    [
-      { "nume": "...", "perioada": "...", "locatie": "...", "dataStart": "YYYY-MM-DD" },
-      ...
-    ]
-    """
     con = get_conn()
-    # --- MODIFICARE AICI: Selectam si cere_inaltime ---
-    rows = con.execute("SELECT nume, perioada, locatie, cere_inaltime FROM concursuri").fetchall()
+    # 1. ADAGĂ 'inscrieri_deschise' AICI ÎN SELECT:
+    rows = con.execute("SELECT nume, perioada, locatie, cere_inaltime, inscrieri_deschise FROM concursuri").fetchall()
 
     data = [{
         "nume": r["nume"],
         "perioada": r["perioada"],
         "locatie": r["locatie"],
-        "cere_inaltime": r["cere_inaltime"],  # --- MODIFICARE AICI ---
+        "cere_inaltime": r["cere_inaltime"],
+        # 2. ADAGĂ ASTA ÎN RĂSPUNS (Dacă e Null, punem True implicit):
+        "inscrieri_deschise": r["inscrieri_deschise"] if r["inscrieri_deschise"] is not None else True,
         "dataStart": extract_data_start(r["perioada"])
     } for r in rows]
 
