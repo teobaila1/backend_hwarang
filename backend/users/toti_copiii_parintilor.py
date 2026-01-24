@@ -47,6 +47,7 @@ def toti_copiii():
     try:
         con = get_conn()
         cur = con.cursor()
+        # Selectam si data_nasterii
         cur.execute("""
             SELECT c.id, c.nume, c.data_nasterii, c.gen, c.grupa_text,
                    u.id as pid, u.username, u.email, u.nume_complet
@@ -70,14 +71,21 @@ def toti_copiii():
                     "copii": []
                 }
 
-            # AICI CALCULĂM VÂRSTA PENTRU AFIȘARE
+            # Calculăm vârsta pentru afișare în tabel
             varsta_calc = _calc_age(r['data_nasterii'])
+
+            # Pregătim data pentru calendar (YYYY-MM-DD)
+            dn_str = str(r['data_nasterii']) if r['data_nasterii'] else ""
+
+            # Reparăm Genul (m -> M)
+            gen_cap = (r['gen'] or "").capitalize()
 
             map_parinti[pid]["copii"].append({
                 "id": r['id'],
                 "nume": r['nume'],
-                "varsta": str(varsta_calc),  # Frontend-ul vrea string/int
-                "gen": r['gen'],
+                "varsta": str(varsta_calc),
+                "data_nasterii": dn_str,  # <-- IMPORTANT pentru Editare
+                "gen": gen_cap,  # <-- IMPORTANT pentru Select
                 "grupa": r['grupa_text']
             })
 
@@ -96,6 +104,7 @@ def adauga_copil():
     nume = data.get("nume")
     grupa = data.get("grupa")
     gen = data.get("gen")
+    data_nasterii = data.get("data_nasterii")  # YYYY-MM-DD
 
     if not target_username or not nume:
         return jsonify({"status": "error", "message": "Date incomplete"}), 400
@@ -112,9 +121,9 @@ def adauga_copil():
         new_id = uuid.uuid4().hex
 
         cur.execute("""
-            INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, added_by_trainer)
-            VALUES (%s, %s, %s, %s, %s, TRUE)
-        """, (new_id, pid, nume, gen, grupa))
+            INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
+            VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+        """, (new_id, pid, nume, gen, grupa, data_nasterii))
 
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
@@ -128,7 +137,7 @@ def adauga_copil():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- EDITARE COPIL (Ruta care lipsea!) ---
+# --- EDITARE COPIL (Fix pentru Data Nașterii) ---
 @toti_copiii_parintilor_bp.patch("/api/admin/copii/<child_id>")
 @token_required
 @admin_required
@@ -137,23 +146,19 @@ def admin_edit_child(child_id):
     nume = _normalize_name(data.get("nume"))
     grupa = _normalize_name(data.get("grupa"))
     gen = data.get("gen")
-
-    # Dacă adminul editează vârsta manual (string), o ignorăm sau încercăm s-o convertim.
-    # Ideal adminul ar trebui să editeze data nașterii, dar frontend-ul trimite vârsta.
-    # Pentru moment, facem update la Nume, Gen și Grupă.
+    data_nasterii = data.get("data_nasterii")  # <-- Primim data nouă
 
     try:
         con = get_conn()
         cur = con.cursor()
 
-        # Update tabel copii
-        fields = ["nume = %s", "gen = %s", "grupa_text = %s"]
-        values = [nume, gen, grupa, child_id]
+        # Update inclusiv data_nasterii
+        fields = ["nume = %s", "gen = %s", "grupa_text = %s", "data_nasterii = %s"]
+        values = [nume, gen, grupa, data_nasterii, child_id]
 
         cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(values))
 
-        # Update tabel sportivi_pe_grupe
-        # Ștergem asocierile vechi și punem cea nouă
+        # Update grupe
         cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (child_id,))
 
         if grupa:
@@ -184,7 +189,7 @@ def admin_delete_child(child_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- ADMIN: DELETE PĂRINTE ---
+# --- RESTUL RUTELOR (DELETE/UPDATE PARINTE) RAMAN NESCHIMBATE ---
 @toti_copiii_parintilor_bp.delete("/api/admin/parinte/<parent_username>")
 @token_required
 @admin_required
@@ -201,7 +206,6 @@ def admin_delete_parent(parent_username):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- ADMIN: UPDATE PĂRINTE ---
 @toti_copiii_parintilor_bp.patch("/api/admin/parinte/<parent_username>")
 @token_required
 @admin_required

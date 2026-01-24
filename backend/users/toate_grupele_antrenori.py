@@ -88,11 +88,18 @@ def toate_grupele_antrenori():
                 for m in members:
                     is_sportiv = (m['tip'] == 'sportiv')
                     p_display = m.get('p_full') or m.get('p_user') or "Unknown"
+
+                    # === MODIFICĂRI AICI ===
+                    dn_str = str(m['data_nasterii']) if m['data_nasterii'] else ""
+                    gen_cap = (m['gen'] or "").capitalize() if m['gen'] else "—"
+                    # =======================
+
                     copii_formatted.append({
                         "id": m['id'],
                         "nume": m['nume'],
                         "varsta": _calculate_age(m['data_nasterii']),
-                        "gen": m['gen'] or "—",
+                        "data_nasterii": dn_str,  # Trimitem data!
+                        "gen": gen_cap,  # Trimitem genul corectat!
                         "grupa": gnume,
                         "_parent": {
                             "username": m.get('p_user'),
