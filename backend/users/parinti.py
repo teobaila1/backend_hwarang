@@ -18,7 +18,7 @@ def _normalize_name(s):
     return s
 
 
-# --- FUNCȚIE NOUĂ: Repară numele grupei (Ex: "1" -> "Grupa 1") ---
+# Repară numele grupei (Ex: "1" -> "Grupa 1")
 def _normalize_group_name(g):
     if not g: return ""
     g = str(g).strip()
@@ -28,48 +28,32 @@ def _normalize_group_name(g):
         return f"Grupa {g}"
 
     # 2. Dacă scrie "gr 1" sau "gr.1", corectăm în "Grupa 1"
-    # (Optional, dar util)
     if g.lower().startswith("gr") and any(c.isdigit() for c in g):
-        # Extragem doar numărul
         nums = re.findall(r'\d+', g)
         if nums:
             return f"Grupa {nums[0]}"
 
-    # 3. Altfel, lăsăm numele așa cum e (ex: "Baby Hwarang", "Avansati")
+    # 3. Altfel, lăsăm numele așa cum e
     return _normalize_name(g)
 
 
 def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
-    # Aici folosim funcția de normalizare
     g_norm = _normalize_group_name(group_name)
 
     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (g_norm,))
     row = cur.fetchone()
     if row: return row['id']
 
-    # Dacă nu există, o creăm cu numele frumos ("Grupa 1")
     cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (g_norm,))
     return cur.fetchone()['id']
-
-
-def _calc_age(dob):
-    if not dob: return ""
-    try:
-        today = date.today()
-        if isinstance(dob, str):
-            dob = date.fromisoformat(dob)
-        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-    except:
-        return ""
-
 
 
 def _new_claim_code():
     return uuid.uuid4().hex[:8].upper()
 
 
-# --- 1. CREARE PLACEHOLDER ---
+# --- 1. CREARE PLACEHOLDER (Păstrat din codul tău) ---
 @parinti_bp.post("/api/parinti/placeholder")
 @token_required
 def create_parent_placeholder():
@@ -102,7 +86,7 @@ def create_parent_placeholder():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 2. REVENDICARE CONT ---
+# --- 2. REVENDICARE CONT (Păstrat din codul tău) ---
 @parinti_bp.patch("/api/parinti/claim")
 def claim_parent_account():
     data = request.get_json(silent=True) or {}
@@ -170,7 +154,7 @@ def claim_parent_account():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- RUTELE PENTRU COPIII MEI ---
+# --- RUTELE PENTRU COPIII MEI (ACTUALIZATE) ---
 
 @parinti_bp.get("/api/copiii_mei")
 @token_required
@@ -179,20 +163,23 @@ def get_my_children():
     con = get_conn()
     try:
         cur = con.cursor()
+        # Am adăugat data_nasterii în SELECT
         sql = "SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s"
         cur.execute(sql, (user_id,))
         rows = cur.fetchall()
 
         children = []
         for r in rows:
-            varsta_num = _calc_age(r.get('data_nasterii'))
             grp = r.get('grupa_text') or ""
+            # Convertim data în string YYYY-MM-DD pentru frontend
+            dn_str = str(r['data_nasterii']) if r['data_nasterii'] else ""
+
             children.append({
                 "id": r['id'],
                 "nume": r['nume'],
                 "gen": r['gen'],
                 "grupa": grp,
-                "varsta": str(varsta_num)
+                "data_nasterii": dn_str  # Trimitem data exactă
             })
 
         return jsonify(children), 200
@@ -208,75 +195,51 @@ def add_my_child():
     user_id = request.user_id
     data = request.get_json(silent=True) or {}
 
-    # 1. Normalizăm numele introdus (ștergem spații inutile)
-    nume_copil_input = (
-            _normalize_name(data.get("nume")) or
-            _normalize_name(data.get("nume_copil")) or
-            _normalize_name(data.get("name"))
-    )
+    # 1. Numele vine acum complet din Frontend (Nume + Prenume)
+    nume_copil_input = _normalize_name(data.get("nume"))
 
     if not nume_copil_input:
         return jsonify({"status": "error", "message": "Numele este obligatoriu"}), 400
 
-    raw_grupa = data.get("grupa") or data.get("group")
+    raw_grupa = data.get("grupa")
     grupa = _normalize_group_name(raw_grupa)
 
-    gen = data.get("gen") or data.get("gender")
-    varsta_input = data.get("varsta") or data.get("age")
+    gen = data.get("gen")
 
-    # Calcul data nașterii
-    data_nasterii_calc = None
-    if varsta_input and str(varsta_input).isdigit():
-        an_curent = datetime.datetime.now().year
-        an_nastere = an_curent - int(varsta_input)
-        data_nasterii_calc = f"{an_nastere}-01-01"
+    # 2. Citim Data Nașterii direct (YYYY-MM-DD)
+    data_nasterii_input = data.get("data_nasterii")
 
     con = get_conn()
     try:
         cur = con.cursor()
 
-        # --- AUTO-COMPLETARE NUME FAMILIE ---
-        # Pas A: Luăm numele părintelui din baza de date
-        cur.execute("SELECT nume_complet FROM utilizatori WHERE id = %s", (user_id,))
-        p_row = cur.fetchone()
-
-        nume_final = nume_copil_input
-
-        if p_row and p_row['nume_complet']:
-            nume_parinte = _normalize_name(p_row['nume_complet'])
-
-            # Pas B: Verificăm dacă copilul are doar un cuvânt (nu are spații)
-            if " " not in nume_copil_input:
-                # Pas C: Extragem primul cuvânt din numele părintelui (Numele de Familie)
-                # Exemplu: "Popescu Maria" -> "Popescu"
-                parts = nume_parinte.split()
-                if len(parts) >= 1:
-                    nume_familie = parts[0]
-                    # Lipim Nume Familie + Prenume Copil
-                    nume_final = f"{nume_familie} {nume_copil_input}"
-                    print(f"[AUTO-NAME] Transformat '{nume_copil_input}' -> '{nume_final}' (Parinte: {nume_parinte})")
-
-        # ------------------------------------
+        # Verificăm duplicate
+        cur.execute("SELECT id FROM copii WHERE id_parinte = %s AND LOWER(nume) = LOWER(%s)",
+                    (user_id, nume_copil_input))
+        if cur.fetchone():
+            return jsonify({"status": "error", "message": "Acest copil există deja în listă."}), 409
 
         new_id = uuid.uuid4().hex
 
+        # 3. Inserăm direct cu data_nasterii
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)
-        """, (new_id, user_id, nume_final, gen, grupa, data_nasterii_calc))
+        """, (new_id, user_id, nume_copil_input, gen, grupa, data_nasterii_input))
 
+        # 4. Legătură cu Grupa
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
             if gid:
-                cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)", (gid, new_id))
+                cur.execute("""
+                    INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) 
+                    VALUES (%s, %s)
+                    ON CONFLICT (id_grupa, id_sportiv_copil) DO NOTHING
+                """, (gid, new_id))
 
         con.commit()
 
-        # Mesaj personalizat în funcție de ce am salvat
-        msg = f"Copil adăugat: {nume_final}"
-        if grupa:
-            msg += f" în {grupa}"
-
+        msg = f"Copil adăugat: {nume_copil_input}"
         return jsonify({"status": "success", "message": msg}), 200
 
     except Exception as e:
