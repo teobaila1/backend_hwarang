@@ -29,7 +29,6 @@ def get_students():
     con = get_conn()
     try:
         cur = con.cursor()
-        # Luăm copiii și facem JOIN cu părinții lor
         cur.execute("""
             SELECT c.id, c.nume, c.data_nasterii, c.gen, c.grupa_text,
                    u.id as parinte_id, 
@@ -42,13 +41,11 @@ def get_students():
 
         toti_elevii = []
         for r in rows:
-            # Convertim data nașterii la string YYYY-MM-DD
             dn = str(r['data_nasterii']) if r['data_nasterii'] else ""
-
             toti_elevii.append({
                 "id": r['id'],
                 "nume": r['nume'],
-                "data_nasterii": dn,  # Trimitem data
+                "data_nasterii": dn,
                 "gen": r['gen'],
                 "grupa": r['grupa_text'],
                 "parinte_id": r['parinte_id'],
@@ -74,7 +71,6 @@ def add_student():
     grupa = _normalize(data.get("grupa"))
 
     parinte_id = data.get("parinte_id")
-    # Uneori frontend-ul trimite numele părintelui în 'parent_display' sau 'parinte_nume'
     parinte_nume = _normalize(data.get("parent_display") or data.get("parinte_nume"))
 
     if not nume_elev:
@@ -93,7 +89,6 @@ def add_student():
             target_parent_id = parinte_id
 
         elif parinte_nume:
-            # Creăm părinte placeholder dacă nu există
             cur.execute("SELECT id FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (parinte_nume,))
             row = cur.fetchone()
 
@@ -109,21 +104,18 @@ def add_student():
                     RETURNING id
                 """, (parinte_nume, dummy_email, claim_code))
                 target_parent_id = cur.fetchone()['id']
-
-                # Îi punem și rol în tabela roluri
                 cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, 'Parinte')", (target_parent_id,))
         else:
-            return jsonify(
-                {"status": "error", "message": "Trebuie să selectezi un părinte sau să introduci un nume nou."}), 400
+            return jsonify({"status": "error", "message": "Selectează un părinte sau introdu un nume nou."}), 400
 
-        # B. Inserăm Copilul în tabela SQL
+        # B. Inserăm Copilul
         new_id = uuid.uuid4().hex
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, data_nasterii, gen, grupa_text, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, TRUE)
         """, (new_id, target_parent_id, nume_elev, data_nasterii, gen, grupa))
 
-        # C. Facem legătura cu grupa (pentru filtrare ușoară)
+        # C. Legătură Grupă
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
             if gid:
@@ -143,7 +135,7 @@ def add_student():
         con.close()
 
 
-# --- 3. PATCH: Modifică un elev existent (Tabela SQL) ---
+# --- 3. PATCH: Modifică un elev (COPIL sau SPORTIV ADULT) ---
 @elevi_bp.patch("/api/elevi/<string:elev_id>")
 @token_required
 def update_student(elev_id):
@@ -161,8 +153,10 @@ def update_student(elev_id):
     con = get_conn()
     try:
         cur = con.cursor()
+        updated_child = False
+        updated_sportiv = False
 
-        # 1. Update tabel Copii
+        # --- A. Încercăm să actualizăm în tabela COPII ---
         fields = []
         values = []
         if nume: fields.append("nume = %s"); values.append(nume)
@@ -171,30 +165,70 @@ def update_student(elev_id):
         if grupa is not None: fields.append("grupa_text = %s"); values.append(grupa)
 
         if fields:
-            values.append(elev_id)
-            cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(values))
+            # Încercăm update pe copii
+            vals_copil = list(values)
+            vals_copil.append(elev_id)
+            cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(vals_copil))
 
-        # 2. Update Grupa (Legătură)
+            if cur.rowcount > 0:
+                updated_child = True
+
+        # --- B. Dacă nu e copil, încercăm să actualizăm în tabela UTILIZATORI (Sportiv) ---
+        if not updated_child:
+            # Resetăm fields pentru utilizator (nume -> nume_complet)
+            fields_u = []
+            values_u = []
+            if nume: fields_u.append("nume_complet = %s"); values_u.append(nume)
+            if data_nasterii: fields_u.append("data_nasterii = %s"); values_u.append(data_nasterii)
+            if gen: fields_u.append("gen = %s"); values_u.append(gen)
+            # Utilizatorii nu au coloană 'grupa_text' directă de obicei, dar o ignorăm aici și facem update doar la legătură
+
+            if fields_u:
+                values_u.append(elev_id)
+                # Castăm ID la integer implicit prin SQL sau lăsăm string că Postgres se descurcă dacă e numeric
+                # Folosim un try-catch mic în caz că elev_id e UUID și dă eroare la integer conversion
+                try:
+                    cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(values_u))
+                    if cur.rowcount > 0:
+                        updated_sportiv = True
+                except:
+                    pass  # Dacă dă eroare de tip (ex: uuid vs int), înseamnă că nu e user
+
+        if not updated_child and not updated_sportiv:
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit (nici copil, nici sportiv)."}), 404
+
+        # --- C. Actualizare Grupă (Legătură) ---
+        # Indiferent dacă e copil sau sportiv, trebuie să actualizăm tabela de legătură
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
-            # Ștergem vechea asociere și punem cea nouă
-            cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (elev_id,))
-            if gid:
-                cur.execute("""
-                    INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) 
-                    VALUES (%s, %s)
-                    ON CONFLICT (id_grupa, id_sportiv_copil) DO NOTHING
-                """, (gid, elev_id))
 
-        # 3. Update Nume Părinte (Doar dacă e placeholder)
-        if parinte_nume_nou and parinte_id:
+            if updated_child:
+                # Actualizăm legătura pentru COPIL
+                cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (elev_id,))
+                if gid:
+                    cur.execute("""
+                        INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) 
+                        VALUES (%s, %s)
+                        ON CONFLICT (id_grupa, id_sportiv_copil) DO NOTHING
+                    """, (gid, elev_id))
+
+            elif updated_sportiv:
+                # Actualizăm legătura pentru SPORTIV (USER)
+                cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (elev_id,))
+                if gid:
+                    cur.execute("""
+                        INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_user) 
+                        VALUES (%s, %s)
+                        ON CONFLICT (id_grupa, id_sportiv_user) DO NOTHING
+                    """, (gid, elev_id))
+
+        # --- D. Update Nume Părinte (Doar pentru copii) ---
+        if updated_child and parinte_nume_nou and parinte_id:
             cur.execute("SELECT is_placeholder FROM utilizatori WHERE id = %s", (parinte_id,))
             row = cur.fetchone()
             if row and row['is_placeholder'] == 1:
-                cur.execute("""
-                    UPDATE utilizatori SET username = %s, nume_complet = %s 
-                    WHERE id = %s
-                """, (parinte_nume_nou, parinte_nume_nou, parinte_id))
+                cur.execute("UPDATE utilizatori SET username = %s, nume_complet = %s WHERE id = %s",
+                            (parinte_nume_nou, parinte_nume_nou, parinte_id))
 
         con.commit()
         return jsonify({"status": "success", "message": "Date actualizate."}), 200
@@ -213,12 +247,30 @@ def delete_student(elev_id):
     con = get_conn()
     try:
         cur = con.cursor()
-        cur.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
-        if cur.rowcount == 0:
-            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
 
-        con.commit()
-        return jsonify({"status": "success", "message": "Elev șters."})
+        # Încercăm ștergere din COPII
+        cur.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
+        if cur.rowcount > 0:
+            con.commit()
+            return jsonify({"status": "success", "message": "Elev (copil) șters."})
+
+        # Dacă nu, încercăm ștergere legătură SPORTIV din GRUPE (nu ștergem Userul complet, doar din grupă?)
+        # De obicei "Șterge elev" la un sportiv adult înseamnă scoaterea lui din evidența antrenorului
+        # Dar dacă vrei să ștergi contul, e altceva.
+        # Aici presupunem că vrem să îl scoatem din grupă dacă e sportiv.
+
+        # Verificăm dacă e sportiv
+        try:
+            cur.execute("SELECT id FROM utilizatori WHERE id = %s AND rol = 'Sportiv'", (elev_id,))
+            if cur.fetchone():
+                # E sportiv, ștergem doar legăturile cu grupele
+                cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (elev_id,))
+                con.commit()
+                return jsonify({"status": "success", "message": "Sportiv eliminat din grupe."})
+        except:
+            pass
+
+        return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
 
     except Exception as e:
         con.rollback()
@@ -262,12 +314,11 @@ def sugestii_inscriere():
                 copii_list.append({
                     "nume": c['nume'],
                     "grupa": c['grupa_text'],
-                    # Opțional: putem trimite și data nașterii pentru autofill
                     "data_nasterii": str(c['data_nasterii']) if c['data_nasterii'] else "",
                     "gen": c['gen']
                 })
 
-        # 3. Dacă e Sportiv, se sugerează doar pe el (frontend-ul se ocupă de asta de obicei)
+        # 3. Dacă e Sportiv, se sugerează doar pe el
         elif rol == 'sportiv':
             pass
 
