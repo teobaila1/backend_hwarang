@@ -252,7 +252,7 @@ def sugestii_inscriere():
         # 2. Dacă e Părinte sau Admin, îi căutăm copiii în tabelul SQL 'copii'
         if rol in ['parinte', 'admin']:
             cur.execute("""
-                SELECT nume, grupa_text, data_nasterii, gen, greutate, inaltime, grad_centura 
+                SELECT nume, grupa_text, data_nasterii, gen 
                 FROM copii 
                 WHERE id_parinte = %s
             """, (user_id,))
