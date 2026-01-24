@@ -1,6 +1,5 @@
-import json
-import re
 import uuid
+import re
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from ..accounts.decorators import token_required
@@ -13,71 +12,69 @@ def _normalize(s):
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
-def _safe_load_list(s):
-    if not s: return []
-    try:
-        if isinstance(s, list): return s
-        v = json.loads(s)
-        return v if isinstance(v, list) else []
-    except:
-        return []
+def _get_or_create_group_id(cur, group_name):
+    if not group_name: return None
+    gn = _normalize(group_name)
+    cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (gn,))
+    row = cur.fetchone()
+    if row: return row['id']
+    cur.execute("INSERT INTO grupe (nume) VALUES (%s) RETURNING id", (gn,))
+    return cur.fetchone()['id']
 
 
-def _update_grupe_column(con, parent_id, copii_list):
-    """Recalculează coloana 'grupe' (text) pe baza listei de copii."""
-    grupe_set = set()
-    for c in copii_list:
-        g = (c.get("grupa") or "").strip()
-        if g:
-            grupe_set.add(g)
-
-    grupe_str = ", ".join(sorted(grupe_set))
-    con.execute("UPDATE utilizatori SET grupe = %s WHERE id = %s", (grupe_str, parent_id))
-
-
-# --- 1. GET: Returnează toți elevii ---
+# --- 1. GET: Returnează toți elevii (Din tabelul SQL COPII) ---
 @elevi_bp.get("/api/elevi")
 @token_required
 def get_students():
     con = get_conn()
     try:
-        rows = con.execute("""
-            SELECT id, nume_complet, username, email, copii 
-            FROM utilizatori 
-            WHERE copii IS NOT NULL
-        """).fetchall()
+        cur = con.cursor()
+        # Luăm copiii și facem JOIN cu părinții lor
+        cur.execute("""
+            SELECT c.id, c.nume, c.data_nasterii, c.gen, c.grupa_text,
+                   u.id as parinte_id, 
+                   COALESCE(u.nume_complet, u.username) as parinte_nume
+            FROM copii c
+            LEFT JOIN utilizatori u ON c.id_parinte = u.id
+            ORDER BY c.nume ASC
+        """)
+        rows = cur.fetchall()
 
         toti_elevii = []
         for r in rows:
-            row_dict = dict(r)
-            parinte_nume = row_dict.get("nume_complet") or row_dict.get("username")
-            parinte_id = row_dict.get("id")
+            # Convertim data nașterii la string YYYY-MM-DD
+            dn = str(r['data_nasterii']) if r['data_nasterii'] else ""
 
-            copii_list = _safe_load_list(row_dict.get("copii"))
-
-            for copil in copii_list:
-                if isinstance(copil, dict):
-                    copil["parinte_id"] = parinte_id
-                    copil["parinte_nume"] = parinte_nume
-                    toti_elevii.append(copil)
+            toti_elevii.append({
+                "id": r['id'],
+                "nume": r['nume'],
+                "data_nasterii": dn,  # Trimitem data
+                "gen": r['gen'],
+                "grupa": r['grupa_text'],
+                "parinte_id": r['parinte_id'],
+                "parinte_nume": r['parinte_nume']
+            })
 
         return jsonify(toti_elevii)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
 
 
-# --- 2. POST: Adaugă un elev ---
+# --- 2. POST: Adaugă un elev (În tabelul SQL COPII) ---
 @elevi_bp.post("/api/elevi")
 @token_required
 def add_student():
     data = request.get_json(silent=True) or {}
 
     nume_elev = _normalize(data.get("nume"))
-    varsta = data.get("varsta")
+    data_nasterii = data.get("data_nasterii")  # YYYY-MM-DD
     gen = data.get("gen")
     grupa = _normalize(data.get("grupa"))
 
     parinte_id = data.get("parinte_id")
+    # Uneori frontend-ul trimite numele părintelui în 'parent_display' sau 'parinte_nume'
     parinte_nume = _normalize(data.get("parent_display") or data.get("parinte_nume"))
 
     if not nume_elev:
@@ -85,163 +82,128 @@ def add_student():
 
     con = get_conn()
     try:
+        cur = con.cursor()
         target_parent_id = None
-        copii_list = []
 
+        # A. Identificăm sau creăm Părintele
         if parinte_id:
-            # A. Părinte existent
-            row = con.execute("SELECT id, copii FROM utilizatori WHERE id = %s", (parinte_id,)).fetchone()
-            if not row:
+            cur.execute("SELECT id FROM utilizatori WHERE id = %s", (parinte_id,))
+            if not cur.fetchone():
                 return jsonify({"status": "error", "message": "Părintele selectat nu mai există."}), 404
-            target_parent_id = row["id"]
-            copii_list = _safe_load_list(row["copii"])
+            target_parent_id = parinte_id
 
         elif parinte_nume:
-            # B. Părinte nou (Placeholder)
-            # Verificăm unicitatea
-            check = con.execute("SELECT id FROM utilizatori WHERE LOWER(username) = LOWER(%s)",
-                                (parinte_nume,)).fetchone()
-            if check:
-                return jsonify({"status": "error",
-                                "message": "Există deja un părinte cu acest nume. Selectează-l din listă."}), 409
+            # Creăm părinte placeholder dacă nu există
+            cur.execute("SELECT id FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (parinte_nume,))
+            row = cur.fetchone()
 
-            # Generăm cod de revendicare
-            claim_code = uuid.uuid4().hex[:8].upper()
-            # Email dummy pentru a nu crăpa la constrângerea UNIQUE (dacă există)
-            dummy_email = f"placeholder_{claim_code}@hwarang.temp"
+            if row:
+                target_parent_id = row['id']
+            else:
+                claim_code = uuid.uuid4().hex[:8].upper()
+                dummy_email = f"placeholder_{claim_code}@hwarang.temp"
 
-            # --- AICI ESTE MODIFICAREA: IMPUNEM ROLUL 'Parinte' ---
-            cur = con.execute("""
-                INSERT INTO utilizatori (
-                    username, 
-                    email,
-                    parola, 
-                    rol,               -- Coloana rol
-                    is_placeholder, 
-                    claim_code, 
-                    copii, 
-                    grupe
-                )
-                VALUES (%s, %s, 'NO_LOGIN', 'Parinte', 1, %s, '[]', '')
-                RETURNING id
-            """, (parinte_nume, dummy_email, claim_code))
+                cur.execute("""
+                    INSERT INTO utilizatori (username, email, parola, rol, is_placeholder, claim_code, copii, grupe)
+                    VALUES (%s, %s, 'NO_LOGIN', 'Parinte', 1, %s, '[]', '')
+                    RETURNING id
+                """, (parinte_nume, dummy_email, claim_code))
+                target_parent_id = cur.fetchone()['id']
 
-            try:
-                new_row = cur.fetchone()
-                target_parent_id = new_row['id'] if new_row else cur.lastrowid
-            except:
-                target_parent_id = cur.lastrowid
-
-            copii_list = []
+                # Îi punem și rol în tabela roluri
+                cur.execute("INSERT INTO roluri (id_user, rol) VALUES (%s, 'Parinte')", (target_parent_id,))
         else:
             return jsonify(
                 {"status": "error", "message": "Trebuie să selectezi un părinte sau să introduci un nume nou."}), 400
 
-        # C. Adăugăm copilul
-        new_child = {
-            "id": uuid.uuid4().hex,
-            "nume": nume_elev,
-            "varsta": varsta,
-            "gen": gen,
-            "grupa": grupa
-        }
-        copii_list.append(new_child)
+        # B. Inserăm Copilul în tabela SQL
+        new_id = uuid.uuid4().hex
+        cur.execute("""
+            INSERT INTO copii (id, id_parinte, nume, data_nasterii, gen, grupa_text, added_by_trainer)
+            VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+        """, (new_id, target_parent_id, nume_elev, data_nasterii, gen, grupa))
 
-        # D. Salvăm
-        con.execute(
-            "UPDATE utilizatori SET copii = %s WHERE id = %s",
-            (json.dumps(copii_list, ensure_ascii=False), target_parent_id)
-        )
-        _update_grupe_column(con, target_parent_id, copii_list)
+        # C. Facem legătura cu grupa (pentru filtrare ușoară)
+        if grupa:
+            gid = _get_or_create_group_id(cur, grupa)
+            if gid:
+                cur.execute("""
+                    INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) 
+                    VALUES (%s, %s)
+                    ON CONFLICT (id_grupa, id_sportiv_copil) DO NOTHING
+                """, (gid, new_id))
+
         con.commit()
-
         return jsonify({"status": "success", "message": "Elev adăugat cu succes."}), 201
 
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
 
 
-# --- 3. PATCH: Modifică un elev existent (și numele părintelui) ---
+# --- 3. PATCH: Modifică un elev existent (Tabela SQL) ---
 @elevi_bp.patch("/api/elevi/<string:elev_id>")
 @token_required
 def update_student(elev_id):
     data = request.get_json(silent=True) or {}
 
+    # Date noi
+    nume = _normalize(data.get("nume"))
+    data_nasterii = data.get("data_nasterii")
+    gen = data.get("gen")
+    grupa = _normalize(data.get("grupa"))
+
+    parinte_nume_nou = _normalize(data.get("parinte_nume") or data.get("parent_display"))
+    parinte_id = data.get("parinte_id")
+
     con = get_conn()
     try:
-        rows = con.execute(
-            "SELECT id, copii, is_placeholder, username, nume_complet FROM utilizatori WHERE copii IS NOT NULL").fetchall()
+        cur = con.cursor()
 
-        parent_found_row = None
-        copii_list = []
-        child_found = False
+        # 1. Update tabel Copii
+        fields = []
+        values = []
+        if nume: fields.append("nume = %s"); values.append(nume)
+        if data_nasterii: fields.append("data_nasterii = %s"); values.append(data_nasterii)
+        if gen: fields.append("gen = %s"); values.append(gen)
+        if grupa is not None: fields.append("grupa_text = %s"); values.append(grupa)
 
-        # 1. Găsim copilul
-        for r in rows:
-            c_list = _safe_load_list(r["copii"])
-            for i, child in enumerate(c_list):
-                if child.get("id") == elev_id:
-                    parent_found_row = r
-                    copii_list = c_list
+        if fields:
+            values.append(elev_id)
+            cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(values))
 
-                    if "nume" in data: child["nume"] = _normalize(data["nume"])
-                    if "varsta" in data: child["varsta"] = data["varsta"]
-                    if "gen" in data: child["gen"] = data["gen"]
-                    if "grupa" in data: child["grupa"] = _normalize(data["grupa"])
+        # 2. Update Grupa (Legătură)
+        if grupa:
+            gid = _get_or_create_group_id(cur, grupa)
+            # Ștergem vechea asociere și punem cea nouă
+            cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (elev_id,))
+            if gid:
+                cur.execute("""
+                    INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) 
+                    VALUES (%s, %s)
+                    ON CONFLICT (id_grupa, id_sportiv_copil) DO NOTHING
+                """, (gid, elev_id))
 
-                    c_list[i] = child
-                    child_found = True
-                    break
-            if child_found:
-                break
+        # 3. Update Nume Părinte (Doar dacă e placeholder)
+        if parinte_nume_nou and parinte_id:
+            cur.execute("SELECT is_placeholder FROM utilizatori WHERE id = %s", (parinte_id,))
+            row = cur.fetchone()
+            if row and row['is_placeholder'] == 1:
+                cur.execute("""
+                    UPDATE utilizatori SET username = %s, nume_complet = %s 
+                    WHERE id = %s
+                """, (parinte_nume_nou, parinte_nume_nou, parinte_id))
 
-        if not child_found:
-            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
-
-        parent_id = parent_found_row["id"]
-
-        # 2. Actualizăm Numele Părintelui
-        nume_parinte_nou = _normalize(data.get("parinte_nume") or data.get("parent_display"))
-
-        if nume_parinte_nou:
-            nume_vechi = (parent_found_row["nume_complet"] or parent_found_row["username"] or "").strip()
-
-            if nume_parinte_nou.lower() != nume_vechi.lower():
-                is_placeholder = parent_found_row["is_placeholder"]
-
-                if is_placeholder == 1:
-                    # Dacă e placeholder, putem schimba username-ul
-                    try:
-                        con.execute(
-                            "UPDATE utilizatori SET username = %s, nume_complet = %s WHERE id = %s",
-                            (nume_parinte_nou, nume_parinte_nou, parent_id)
-                        )
-                    except:
-                        con.execute(
-                            "UPDATE utilizatori SET nume_complet = %s WHERE id = %s",
-                            (nume_parinte_nou, parent_id)
-                        )
-                else:
-                    # Dacă e cont real, schimbăm doar numele de afișare
-                    con.execute(
-                        "UPDATE utilizatori SET nume_complet = %s WHERE id = %s",
-                        (nume_parinte_nou, parent_id)
-                    )
-
-        # 3. Salvăm
-        con.execute(
-            "UPDATE utilizatori SET copii = %s WHERE id = %s",
-            (json.dumps(copii_list, ensure_ascii=False), parent_id)
-        )
-        _update_grupe_column(con, parent_id, copii_list)
         con.commit()
-
         return jsonify({"status": "success", "message": "Date actualizate."}), 200
 
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
 
 
 # --- 4. DELETE: Șterge un elev ---
@@ -250,53 +212,33 @@ def update_student(elev_id):
 def delete_student(elev_id):
     con = get_conn()
     try:
-        rows = con.execute("SELECT id, copii FROM utilizatori WHERE copii IS NOT NULL").fetchall()
-
-        parent_found = None
-        copii_list = []
-        child_found = False
-
-        for r in rows:
-            c_list = _safe_load_list(r["copii"])
-            new_list = [c for c in c_list if c.get("id") != elev_id]
-
-            if len(new_list) < len(c_list):
-                parent_found = r["id"]
-                copii_list = new_list
-                child_found = True
-                break
-
-        if child_found:
-            con.execute(
-                "UPDATE utilizatori SET copii = %s WHERE id = %s",
-                (json.dumps(copii_list, ensure_ascii=False), parent_found)
-            )
-            _update_grupe_column(con, parent_found, copii_list)
-            con.commit()
-            return jsonify({"status": "success", "message": "Elev șters."})
-        else:
+        cur = con.cursor()
+        cur.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
+        if cur.rowcount == 0:
             return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+
+        con.commit()
+        return jsonify({"status": "success", "message": "Elev șters."})
 
     except Exception as e:
         con.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
 
 
-
-# --- 5. SUGESTII PENTRU ÎNSCRIERE CONCURS ---
+# --- 5. SUGESTII PENTRU ÎNSCRIERE CONCURS (Adaptat pentru SQL) ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 @token_required
 def sugestii_inscriere():
     username = request.args.get('username')
     if not username: return jsonify({"status": "error", "message": "Username lipsă"}), 400
 
+    con = get_conn()
     try:
-        con = get_conn()
         cur = con.cursor()
 
-        # 1. Identificăm utilizatorul curent (ID, Rol, Nume)
-        # Putem lua rolul și din tabelul 'roluri', dar pentru simplitate îl luăm din utilizatori dacă există,
-        # sau facem un join. Aici presupunem că există coloana 'rol' în utilizatori (migrarea nu o șterge).
+        # 1. Identificăm utilizatorul curent
         cur.execute("SELECT id, rol, nume_complet FROM utilizatori WHERE username=%s", (username,))
         row = cur.fetchone()
 
@@ -309,17 +251,23 @@ def sugestii_inscriere():
 
         # 2. Dacă e Părinte sau Admin, îi căutăm copiii în tabelul SQL 'copii'
         if rol in ['parinte', 'admin']:
-            cur.execute("SELECT nume, grupa_text FROM copii WHERE id_parinte = %s", (user_id,))
+            cur.execute("""
+                SELECT nume, grupa_text, data_nasterii, gen, greutate, inaltime, grad_centura 
+                FROM copii 
+                WHERE id_parinte = %s
+            """, (user_id,))
             rows_copii = cur.fetchall()
 
             for c in rows_copii:
                 copii_list.append({
                     "nume": c['nume'],
-                    "grupa": c['grupa_text']
+                    "grupa": c['grupa_text'],
+                    # Opțional: putem trimite și data nașterii pentru autofill
+                    "data_nasterii": str(c['data_nasterii']) if c['data_nasterii'] else "",
+                    "gen": c['gen']
                 })
 
-        # 3. Dacă e Sportiv, se sugerează doar pe el (frontend-ul se ocupă de asta folosind 'nume_propriu',
-        # dar putem trimite lista goală la copii)
+        # 3. Dacă e Sportiv, se sugerează doar pe el (frontend-ul se ocupă de asta de obicei)
         elif rol == 'sportiv':
             pass
 
@@ -334,3 +282,5 @@ def sugestii_inscriere():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
