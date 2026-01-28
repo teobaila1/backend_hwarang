@@ -175,24 +175,26 @@ def update_student(elev_id):
             except:
                 pass  # Poate id-ul nu e format valid pentru copii
 
-        # --- B. Dacă nu e copil, încercăm să actualizăm în tabela UTILIZATORI (Sportiv Adult) ---
-        if not updated_child:
-            # Pentru utilizatori (Bohdana), numele e în 'nume_complet'
-            fields_u = []
-            values_u = []
-            if nume: fields_u.append("nume_complet = %s"); values_u.append(nume)
-            if data_nasterii: fields_u.append("data_nasterii = %s"); values_u.append(data_nasterii)
-            if gen: fields_u.append("gen = %s"); values_u.append(gen)
+            # --- B. Dacă nu e copil, încercăm să actualizăm în tabela UTILIZATORI (Sportiv Adult) ---
+            if not updated_child:
+                # Pentru utilizatori (Bohdana), numele e în 'nume_complet'
+                fields_u = []
+                values_u = []
+                if nume: fields_u.append("nume_complet = %s"); values_u.append(nume)
+                if data_nasterii: fields_u.append("data_nasterii = %s"); values_u.append(data_nasterii)
+                if gen: fields_u.append("gen = %s"); values_u.append(gen)
 
-            if fields_u:
-                values_u.append(elev_id)
-                try:
-                    # Aici prindem ID-ul "25"
-                    cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(values_u))
-                    if cur.rowcount > 0:
-                        updated_sportiv = True
-                except Exception:
-                    pass
+                if fields_u:
+                    values_u.append(elev_id)
+                    try:
+                        # Aici prindem ID-ul "25"
+                        cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(values_u))
+                        if cur.rowcount > 0:
+                            updated_sportiv = True
+                    except Exception as e:
+                        # Afișăm eroarea în consola serverului pentru debugging
+                        print(f"Eroare update utilizator (sportiv): {e}")
+                        pass  # Continuăm, dar acum știm ce s-a întâmplat dacă ne uităm în loguri
 
         if not updated_child and not updated_sportiv:
             return jsonify({"status": "error", "message": "Elevul nu a fost găsit (nici copil, nici sportiv)."}), 404
