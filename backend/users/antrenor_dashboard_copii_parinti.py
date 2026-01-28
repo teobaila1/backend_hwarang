@@ -219,17 +219,27 @@ def editeaza_elev(student_id):
     nume = data.get("nume")
     gen = data.get("gen")
     varsta = data.get("varsta")
+
+    # ADDED: Read the exact date from frontend
+    data_nasterii_input = data.get("data_nasterii")
+
     grupa_input = data.get("grupa")
 
     con = get_conn()
     try:
         cur = con.cursor()
 
-        data_nasterii_calc = None
-        if varsta and str(varsta).isdigit():
+        data_nasterii_final = None
+
+        # PRIORITY 1: If we receive the exact date, use it
+        if data_nasterii_input:
+            data_nasterii_final = data_nasterii_input
+
+        # PRIORITY 2: If we don't have a date, but we have age (old legacy), calculate 01-01
+        elif varsta and str(varsta).isdigit():
             an_curent = datetime.now().year
             an_nastere = an_curent - int(varsta)
-            data_nasterii_calc = f"{an_nastere}-01-01"
+            data_nasterii_final = f"{an_nastere}-01-01"
 
         grupa_noua = _normalize_group_name(grupa_input) if grupa_input else None
 
@@ -242,9 +252,12 @@ def editeaza_elev(student_id):
         if gen:
             fields.append("gen = %s")
             vals.append(gen)
-        if data_nasterii_calc:
+
+        # Use the final date determined above
+        if data_nasterii_final:
             fields.append("data_nasterii = %s")
-            vals.append(data_nasterii_calc)
+            vals.append(data_nasterii_final)
+
         if grupa_noua:
             fields.append("grupa_text = %s")
             vals.append(grupa_noua)
@@ -253,20 +266,47 @@ def editeaza_elev(student_id):
             return jsonify({"status": "success", "message": "Nimic de actualizat."}), 200
 
         vals.append(student_id)
-        sql = f"UPDATE copii SET {', '.join(fields)} WHERE id = %s"
 
-        cur.execute(sql, tuple(vals))
+        # 1. Try updating CHILD
+        try:
+            sql = f"UPDATE copii SET {', '.join(fields)} WHERE id = %s"
+            cur.execute(sql, tuple(vals))
+            rows = cur.rowcount
+        except:
+            rows = 0
+            con.rollback()
+            cur = con.cursor()
 
-        if cur.rowcount == 0:
-            return jsonify({"status": "error",
-                            "message": "Nu se pot edita conturile de utilizatori (adulți) din acest meniu."}), 404
+        # 2. If not child, try updating USER (Adult/Sportiv)
+        if rows == 0 and str(student_id).isdigit():
+            # For users, map fields correctly (nume -> nume_complet)
+            fields_u = []
+            vals_u = []
+            if nume: fields_u.append("nume_complet = %s"); vals_u.append(nume)
+            if gen: fields_u.append("gen = %s"); vals_u.append(gen)
+            if data_nasterii_final: fields_u.append("data_nasterii = %s"); vals_u.append(data_nasterii_final)
 
+            if fields_u:
+                vals_u.append(student_id)
+                try:
+                    cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(vals_u))
+                    rows = cur.rowcount
+                except Exception as e:
+                    print(e)
+                    pass
+
+        if rows == 0:
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit sau nu s-a putut actualiza."}), 404
+
+        # Update Group Link
         if grupa_noua:
             gid = _get_or_create_group_id(cur, grupa_noua)
             if gid:
+                # Try link for child
                 cur.execute("UPDATE sportivi_pe_grupe SET id_grupa = %s WHERE id_sportiv_copil = %s", (gid, student_id))
                 if cur.rowcount == 0:
-                    cur.execute("INSERT INTO sportivi_pe_grupe (id_grupa, id_sportiv_copil) VALUES (%s, %s)",
+                    # Try link for user
+                    cur.execute("UPDATE sportivi_pe_grupe SET id_grupa = %s WHERE id_sportiv_user = %s",
                                 (gid, student_id))
 
         con.commit()
