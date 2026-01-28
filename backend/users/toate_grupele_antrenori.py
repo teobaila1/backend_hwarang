@@ -1,8 +1,7 @@
-import json
 from datetime import datetime
 from flask import Blueprint, jsonify
-from backend.accounts.decorators import token_required, admin_required
 from backend.config import get_conn
+from backend.accounts.decorators import token_required, admin_required
 
 toate_grupele_antrenori_bp = Blueprint('toate_grupele_antrenori', __name__)
 
@@ -15,19 +14,23 @@ def _calculate_age(dob):
         except:
             return 0
     today = datetime.now()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    # Verificăm dacă dob e obiect date sau datetime
+    try:
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except:
+        return 0
 
 
 @toate_grupele_antrenori_bp.get("/api/toate_grupele_antrenori")
 @token_required
 @admin_required
-def toate_grupele_antrenori():
+def get_all_groups_and_athletes():
     con = get_conn()
     try:
         cur = con.cursor()
 
-        # 1. Luăm toți antrenorii
-        cur.execute("SELECT * FROM utilizatori WHERE LOWER(rol) IN ('antrenor', 'admin')")
+        # 1. Luăm toți antrenorii și adminii
+        cur.execute("SELECT id, username, nume_complet FROM utilizatori WHERE LOWER(rol) IN ('antrenor', 'admin')")
         potential_trainers = cur.fetchall()
 
         out = []
@@ -35,11 +38,12 @@ def toate_grupele_antrenori():
         for tr in potential_trainers:
             tid = tr['id']
             tname = tr['username']
-            tdisplay = tr.get('nume_complet') or tname
+            tdisplay = tr['nume_complet'] or tname
 
             grupe_list = []
+
+            # 2. Căutăm grupele asociate acestui antrenor
             try:
-                # 2. Căutăm grupele în tabelul nou
                 cur.execute("""
                     SELECT g.id, g.nume 
                     FROM grupe g
@@ -48,11 +52,6 @@ def toate_grupele_antrenori():
                     ORDER BY g.nume
                 """, (tid,))
                 grupe = cur.fetchall()
-
-                # Fallback pe metoda veche dacă tabelul e gol pentru acest user
-                if not grupe:
-                    cur.execute("SELECT id, nume FROM grupe WHERE id_antrenor = %s", (tid,))
-                    grupe = cur.fetchall()
             except:
                 con.rollback()
                 cur = con.cursor()
@@ -61,55 +60,86 @@ def toate_grupele_antrenori():
             for g in grupe:
                 gid = g['id']
                 gnume = g['nume']
+                lista_membri = []
 
-                # 3. Luăm sportivii
+                # --- A. Luăm COPIII din grupă ---
                 try:
                     cur.execute("""
-                        SELECT c.id, c.nume, c.data_nasterii, c.gen, 'copil' as tip,
-                               u.username as p_user, u.nume_complet as p_full, u.email as p_email
+                        SELECT c.id, c.nume, c.data_nasterii, c.gen, c.id_parinte,
+                               u.username as p_user, u.nume_complet as p_full
                         FROM sportivi_pe_grupe sg
                         JOIN copii c ON sg.id_sportiv_copil = c.id
-                        JOIN utilizatori u ON c.id_parinte = u.id
+                        LEFT JOIN utilizatori u ON c.id_parinte = u.id
                         WHERE sg.id_grupa = %s
-                        UNION ALL
-                        SELECT CAST(u.id AS TEXT), COALESCE(u.nume_complet, u.username), u.data_nasterii, u.gen, 'sportiv' as tip,
-                               u.username, u.nume_complet, u.email
-                        FROM sportivi_pe_grupe sg
-                        JOIN utilizatori u ON sg.id_sportiv_user = u.id
-                        WHERE sg.id_grupa = %s
-                    """, (gid, gid))
-                    members = cur.fetchall()
+                    """, (gid,))
+                    copii_rows = cur.fetchall()
                 except:
                     con.rollback()
                     cur = con.cursor()
-                    members = []
+                    copii_rows = []
 
-                copii_formatted = []
-                for m in members:
-                    is_sportiv = (m['tip'] == 'sportiv')
-                    p_display = m.get('p_full') or m.get('p_user') or "Unknown"
+                for c in copii_rows:
+                    dn_str = str(c['data_nasterii']) if c['data_nasterii'] else ""
+                    gen_cap = (c['gen'] or "").capitalize() if c['gen'] else "—"
+                    p_display = c.get('p_full') or c.get('p_user') or "—"
 
-                    # === MODIFICĂRI AICI ===
-                    dn_str = str(m['data_nasterii']) if m['data_nasterii'] else ""
-                    gen_cap = (m['gen'] or "").capitalize() if m['gen'] else "—"
-                    # =======================
-
-                    copii_formatted.append({
-                        "id": m['id'],
-                        "nume": m['nume'],
-                        "varsta": _calculate_age(m['data_nasterii']),
-                        "data_nasterii": dn_str,  # Trimitem data!
-                        "gen": gen_cap,  # Trimitem genul corectat!
+                    lista_membri.append({
+                        "id": c['id'],
+                        "nume": c['nume'],
+                        "varsta": _calculate_age(c['data_nasterii']),
+                        "data_nasterii": dn_str,
+                        "gen": gen_cap,
                         "grupa": gnume,
+                        "tip": "copil",
                         "_parent": {
-                            "username": m.get('p_user'),
-                            "display": f"{p_display} (Sportiv)" if is_sportiv else p_display,
-                            "email": m.get('p_email')
+                            "id": c['id_parinte'],
+                            "username": c.get('p_user'),
+                            "display": p_display
                         }
                     })
 
-                copii_formatted.sort(key=lambda k: (k['nume'] or "").lower())
-                grupe_list.append({"grupa": gnume, "copii": copii_formatted})
+                # --- B. Luăm SPORTIVII ADULȚI (Useri) din grupă ---
+                try:
+                    cur.execute("""
+                        SELECT u.id, u.nume_complet, u.username, u.data_nasterii, u.gen
+                        FROM sportivi_pe_grupe sg
+                        JOIN utilizatori u ON sg.id_sportiv_user = u.id
+                        WHERE sg.id_grupa = %s
+                    """, (gid,))
+                    adulti_rows = cur.fetchall()
+                except:
+                    con.rollback()
+                    cur = con.cursor()
+                    adulti_rows = []
+
+                for u in adulti_rows:
+                    dn_str = str(u['data_nasterii']) if u['data_nasterii'] else ""
+                    gen_cap = (u['gen'] or "").capitalize() if u['gen'] else "—"
+                    nume_afisat = u['nume_complet'] or u['username']
+
+                    lista_membri.append({
+                        "id": u['id'],  # ID numeric (ex: 25)
+                        "nume": nume_afisat,
+                        "varsta": _calculate_age(u['data_nasterii']),
+                        "data_nasterii": dn_str,
+                        "gen": gen_cap,
+                        "grupa": gnume,
+                        "tip": "adult",
+                        # La adulți nu avem părinte, punem o etichetă specială
+                        "_parent": {
+                            "id": None,
+                            "display": "Sportiv Independent"
+                        }
+                    })
+
+                # Sortăm alfabetic toată lista din grupă
+                lista_membri.sort(key=lambda x: (x['nume'] or "").lower())
+
+                grupe_list.append({
+                    "id_grupa": gid,
+                    "grupa": gnume,
+                    "copii": lista_membri
+                })
 
             if grupe_list:
                 out.append({
