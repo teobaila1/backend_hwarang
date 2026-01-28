@@ -1,6 +1,7 @@
 import json
 import uuid
 import re
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
 from ..accounts.inregistrare import trimite_email_acceptare, trimite_email_respingere
@@ -26,29 +27,20 @@ def _normalize_name(s):
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
-# --- FUNCȚIE NOUĂ DE CURĂȚARE GRUPĂ ---
 def _normalize_group_name(g):
     if not g: return ""
     g = str(g).strip()
-
-    # "1" -> "Grupa 1"
     if g.isdigit():
         return f"Grupa {g}"
-
-    # "gr 1", "Gr.1" -> "Grupa 1"
     if g.lower().startswith("gr") and any(c.isdigit() for c in g):
         nums = re.findall(r'\d+', g)
         if nums: return f"Grupa {nums[0]}"
-
-    # Altfel returnăm textul curat (ex: "Baby Hwarang")
     return _normalize_name(g)
 
 
 def _get_or_create_group_id(cur, group_name):
     if not group_name: return None
-    # Folosim funcția de normalizare aici
     gn = _normalize_group_name(group_name)
-
     cur.execute("SELECT id FROM grupe WHERE LOWER(nume) = LOWER(%s)", (gn,))
     row = cur.fetchone()
     if row: return row['id']
@@ -62,8 +54,6 @@ def _get_or_create_group_id(cur, group_name):
 def get_cereri():
     try:
         con = get_conn()
-
-        # Asigurăm coloanele
         _ensure_column(con, "cereri_utilizatori", "nume_complet")
         _ensure_column(con, "cereri_utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "cereri_utilizatori", "copii", "TEXT")
@@ -111,8 +101,6 @@ def get_cereri():
 def accepta_cerere(cerere_id: int):
     try:
         con = get_conn()
-
-        # Asigurăm coloanele în tabela finală
         _ensure_column(con, "utilizatori", "nume_complet", "TEXT")
         _ensure_column(con, "utilizatori", "data_nasterii", "DATE")
         _ensure_column(con, "utilizatori", "grupe", "TEXT")
@@ -135,6 +123,12 @@ def accepta_cerere(cerere_id: int):
         grupe_str = row["grupe"]
         nume_complet = row.get("nume_complet") or username
         data_nasterii = row.get("data_nasterii")
+        varsta_user = row.get("varsta")
+
+        # Calcul data nașterii pentru User (dacă lipsește și avem vârstă)
+        if not data_nasterii and varsta_user and str(varsta_user).isdigit():
+             an = datetime.now().year - int(varsta_user)
+             data_nasterii = f"{an}-01-01"
 
         # 2. Verificăm duplicate
         cur.execute("SELECT 1 FROM utilizatori WHERE username = %s OR email = %s LIMIT 1", (username, email))
@@ -156,45 +150,43 @@ def accepta_cerere(cerere_id: int):
         except:
             pass
 
-            # 5. Procesăm PĂRINTE (Copii)
+        # 5. Procesăm PĂRINTE (Copii)
         if rol == 'Parinte' and copii_json:
             try:
                 copii_list = json.loads(copii_json)
                 if isinstance(copii_list, list):
                     for c in copii_list:
                         c_nume = c.get("nume")
-                        c_grupa_raw = c.get("grupa")  # Ce a scris părintele (ex: "1")
+                        c_grupa_raw = c.get("grupa")
                         c_gen = c.get("gen")
                         c_varsta = c.get("varsta")
+                        c_data_nasterii = c.get("data_nasterii") # Căutăm data exactă
 
-                        # A. Normalizare Nume Grupă ("1" -> "Grupa 1")
                         c_grupa_final = _normalize_group_name(c_grupa_raw)
 
-                        # B. Auto-completare Nume Familie Copil
                         if c_nume and " " not in c_nume.strip():
                             if nume_complet:
                                 parts_parinte = _normalize_name(nume_complet).split()
                                 if len(parts_parinte) > 0:
                                     nume_fam = parts_parinte[0]
                                     c_nume = f"{nume_fam} {c_nume}"
-                                    print(f"[AUTO-NAME] Completat: {c_nume}")
 
-                        # C. Calcul Data Nașterii
+                        # AICI ERA PROBLEMA: Dăm prioritate datei exacte
                         dn_copil = None
-                        if c_varsta and str(c_varsta).isdigit():
-                            an_nastere = 2024 - int(c_varsta)
+                        if c_data_nasterii:
+                            dn_copil = c_data_nasterii
+                        elif c_varsta and str(c_varsta).isdigit():
+                            # Doar dacă nu avem dată, aproximăm cu 01-01
+                            an_nastere = datetime.now().year - int(c_varsta)
                             dn_copil = f"{an_nastere}-01-01"
 
-                        # D. Inserare
                         if c_nume:
                             new_child_id = uuid.uuid4().hex
-                            # Inserăm în COPII folosind numele de grupă FRUMOS (c_grupa_final)
                             cur.execute("""
                                 INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
                                 VALUES (%s, %s, %s, %s, %s, %s, FALSE)
                             """, (new_child_id, new_user_id, c_nume, c_gen, c_grupa_final, dn_copil))
 
-                            # Facem legătura
                             if c_grupa_final:
                                 gid = _get_or_create_group_id(cur, c_grupa_final)
                                 if gid:
@@ -204,13 +196,11 @@ def accepta_cerere(cerere_id: int):
             except Exception as ex:
                 print(f"[WARN] Eroare la migrarea copiilor: {ex}")
 
-        # 6. Procesăm SPORTIV (Adult)
+        # 6. Procesăm SPORTIV
         if rol == 'Sportiv' and grupe_str:
             gr_list = [g.strip() for g in grupe_str.split(',') if g.strip()]
             for g_raw in gr_list:
-                # Normalizăm și aici, just in case
                 g_final = _normalize_group_name(g_raw)
-
                 gid = _get_or_create_group_id(cur, g_final)
                 if gid:
                     try:
@@ -219,8 +209,8 @@ def accepta_cerere(cerere_id: int):
                             VALUES (%s, %s)
                             ON CONFLICT DO NOTHING
                         """, (gid, new_user_id))
-                    except Exception as e:
-                        print(f"[ERROR] Nu am putut lega sportivul de grupă: {e}")
+                    except:
+                        pass
 
         # 7. Procesăm ANTRENOR
         if rol == 'Antrenor' and grupe_str:
