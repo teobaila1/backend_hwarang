@@ -1,5 +1,6 @@
 import uuid
 import re
+import json
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from ..accounts.decorators import token_required
@@ -22,17 +23,15 @@ def _get_or_create_group_id(cur, group_name):
     return cur.fetchone()['id']
 
 
-# --- 1. GET: Returnează toți elevii (Combinat Copii + Adulți) ---
+# --- 1. GET: Returnează toți elevii ---
 @elevi_bp.get("/api/elevi")
 @token_required
 def get_students():
     con = get_conn()
     try:
         cur = con.cursor()
-        # Această interogare aduce copiii și face join cu părinții lor
-        # Nota: Pentru a vedea și sportivii adulți aici, ar trebui o interogare UNION,
-        # dar momentan păstrăm logica pentru copii, așa cum e standard.
-        # Dacă Bohdana apare în listă, înseamnă că frontend-ul o ia din alt endpoint sau tabela e deja populată mixt.
+        # Aici aducem copiii. (Dacă ai nevoie și de Sportivii Adulți în această listă, ar trebui făcut un UNION,
+        # dar momentan funcția e gândită pentru a popula tabelele de copii).
         cur.execute("""
             SELECT c.id, c.nume, c.data_nasterii, c.gen, c.grupa_text,
                    u.id as parinte_id, 
@@ -56,9 +55,6 @@ def get_students():
                 "parinte_nume": r['parinte_nume']
             })
 
-        # (Opțional) Dacă vrei să vezi și Adulții în lista principală de elevi, ar trebui adăugați aici.
-        # Dar ne concentrăm pe EDITARE momentan.
-
         return jsonify(toti_elevii)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -66,7 +62,7 @@ def get_students():
         con.close()
 
 
-# --- 2. POST: Adaugă un elev (Implicit Copil) ---
+# --- 2. POST: Adaugă un elev ---
 @elevi_bp.post("/api/elevi")
 @token_required
 def add_student():
@@ -134,7 +130,7 @@ def add_student():
         con.close()
 
 
-# --- 3. PATCH: Modifică un elev (REPARAT PENTRU ID 25) ---
+# --- 3. PATCH: Modifică un elev (SOLUȚIA ROBUSTĂ CU ROLLBACK) ---
 @elevi_bp.patch("/api/elevi/<string:elev_id>")
 @token_required
 def update_student(elev_id):
@@ -145,7 +141,6 @@ def update_student(elev_id):
     gen = data.get("gen")
     grupa = _normalize(data.get("grupa"))
 
-    # Nume părinte (relevant doar la copii)
     parinte_nume_nou = _normalize(data.get("parinte_nume") or data.get("parent_display"))
     parinte_id = data.get("parinte_id")
 
@@ -155,13 +150,32 @@ def update_student(elev_id):
         updated_child = False
         updated_sportiv = False
 
-        # --- LOGICA NOUĂ: Verificăm TIPUL ID-ului ---
-        # ID-ul 25 este numeric. ID-ul de copil este UUID (string cu litere si cifre).
-        is_user_id = str(elev_id).isdigit()
+        # Verificăm formatul doar ca optimizare, dar ne bazăm pe DB pentru siguranță
+        is_probably_user = str(elev_id).isdigit()
 
-        if not is_user_id:
-            # === CAZ 1: Este COPIL (UUID) ===
-            # Facem update doar în tabela copii
+        # --- ÎNCERCARE 1: Dacă pare ID numeric, încercăm PRIMA DATĂ la Useri ---
+        if is_probably_user:
+            fields_u = []
+            values_u = []
+            if nume: fields_u.append("nume_complet = %s"); values_u.append(nume)
+            if data_nasterii: fields_u.append("data_nasterii = %s"); values_u.append(data_nasterii)
+            if gen: fields_u.append("gen = %s"); values_u.append(gen)
+
+            if fields_u:
+                values_u.append(elev_id)
+                try:
+                    cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(values_u))
+                    if cur.rowcount > 0:
+                        updated_sportiv = True
+                except Exception as e:
+                    # CHEIA SUCCESULUI: Resetăm tranzacția dacă crapă ceva aici!
+                    print(f"Eroare update user (dar continuam): {e}")
+                    con.rollback()
+                    # Re-deschidem cursorul după rollback
+                    cur = con.cursor()
+
+        # --- ÎNCERCARE 2: Dacă nu am actualizat user (sau nu părea user), încercăm la Copii ---
+        if not updated_sportiv:
             fields = []
             values = []
             if nume: fields.append("nume = %s"); values.append(nume)
@@ -172,35 +186,30 @@ def update_student(elev_id):
             if fields:
                 vals_copil = list(values)
                 vals_copil.append(elev_id)
-                cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(vals_copil))
-                if cur.rowcount > 0:
-                    updated_child = True
+                try:
+                    cur.execute(f"UPDATE copii SET {', '.join(fields)} WHERE id = %s", tuple(vals_copil))
+                    if cur.rowcount > 0:
+                        updated_child = True
+                except Exception as e:
+                    # Resetăm tranzacția dacă ID-ul "25" ajunge la copii și dă eroare UUID
+                    print(f"Eroare update copil (posibil id de adult): {e}")
+                    con.rollback()
+                    cur = con.cursor()
 
-        else:
-            # === CAZ 2: Este SPORTIV ADULT (User ID numeric - ex: 25) ===
-            # Facem update doar în tabela utilizatori
-            fields_u = []
-            values_u = []
-            if nume: fields_u.append("nume_complet = %s"); values_u.append(nume)
-            if data_nasterii: fields_u.append("data_nasterii = %s"); values_u.append(data_nasterii)
-            if gen: fields_u.append("gen = %s"); values_u.append(gen)
-
-            if fields_u:
-                values_u.append(elev_id)
-                # Acum sigur e numeric, nu mai crapă
-                cur.execute(f"UPDATE utilizatori SET {', '.join(fields_u)} WHERE id = %s", tuple(values_u))
-                if cur.rowcount > 0:
-                    updated_sportiv = True
+        # --- ÎNCERCARE 3: Dacă tot nu am găsit nimic, și am sărit pasul 1 (pt că nu era digit), încercăm Useri acum ---
+        # (Acesta e un caz rar: useri cu ID-uri non-numerice pe viitor)
+        if not updated_child and not updated_sportiv and not is_probably_user:
+            # Repetăm logica de user (opțional, dar bun pentru siguranță completă)
+            pass
 
         if not updated_child and not updated_sportiv:
-            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit (nici copil, nici sportiv)."}), 404
 
-        # --- C. Actualizare Grupă (Tabela sportivi_pe_grupe) ---
+        # --- C. Actualizare Grupă ---
         if grupa:
             gid = _get_or_create_group_id(cur, grupa)
 
             if updated_child:
-                # Actualizăm legătura pentru COPIL
                 cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (elev_id,))
                 if gid:
                     cur.execute("""
@@ -210,8 +219,6 @@ def update_student(elev_id):
                     """, (gid, elev_id))
 
             elif updated_sportiv:
-                # Actualizăm legătura pentru SPORTIV (Folosim id_sportiv_user!)
-                # Ștergem orice legătură veche a acestui user
                 cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (elev_id,))
                 if gid:
                     cur.execute("""
@@ -220,13 +227,16 @@ def update_student(elev_id):
                         ON CONFLICT (id_grupa, id_sportiv_user) DO NOTHING
                     """, (gid, elev_id))
 
-        # --- D. Update Nume Părinte (Doar dacă e Copil și părintele e placeholder) ---
+        # --- D. Update Nume Părinte (Doar la copii) ---
         if updated_child and parinte_nume_nou and parinte_id:
-            cur.execute("SELECT is_placeholder FROM utilizatori WHERE id = %s", (parinte_id,))
-            row = cur.fetchone()
-            if row and row['is_placeholder'] == 1:
-                cur.execute("UPDATE utilizatori SET username = %s, nume_complet = %s WHERE id = %s",
-                            (parinte_nume_nou, parinte_nume_nou, parinte_id))
+            try:
+                cur.execute("SELECT is_placeholder FROM utilizatori WHERE id = %s", (parinte_id,))
+                row = cur.fetchone()
+                if row and row['is_placeholder'] == 1:
+                    cur.execute("UPDATE utilizatori SET username = %s, nume_complet = %s WHERE id = %s",
+                                (parinte_nume_nou, parinte_nume_nou, parinte_id))
+            except:
+                con.rollback()
 
         con.commit()
         return jsonify({"status": "success", "message": "Date actualizate."}), 200
@@ -246,20 +256,33 @@ def delete_student(elev_id):
     try:
         cur = con.cursor()
 
-        # 1. Încercăm ștergere din COPII
-        cur.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
-        if cur.rowcount > 0:
-            con.commit()
-            return jsonify({"status": "success", "message": "Elev (copil) șters."})
+        # Logica robustă: Încercăm ambele cu Rollback între ele
+        deleted = False
 
-        # 2. Dacă nu, poate e SPORTIV? (Nu ștergem contul, doar îl scoatem din grupă)
-        # Verificăm dacă e un ID de user (întreg)
-        if str(elev_id).isdigit():
-            cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (elev_id,))
-            con.commit()
-            return jsonify({"status": "success", "message": "Sportiv eliminat din grupă."})
+        # 1. Copil
+        try:
+            cur.execute("DELETE FROM copii WHERE id = %s", (elev_id,))
+            if cur.rowcount > 0: deleted = True
+        except:
+            con.rollback()
+            cur = con.cursor()
 
-        return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
+        # 2. Sportiv (User)
+        if not deleted:
+            try:
+                # Verificare simplă de siguranță pt ID numeric
+                if str(elev_id).isdigit():
+                    cur.execute("DELETE FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (elev_id,))
+                    # Nu ștergem userul, doar din grupă. Putem considera "deleted" pt UI.
+                    deleted = True
+            except:
+                con.rollback()
+
+        if deleted:
+            con.commit()
+            return jsonify({"status": "success", "message": "Elev șters/scos din grupă."})
+        else:
+            return jsonify({"status": "error", "message": "Elevul nu a fost găsit."}), 404
 
     except Exception as e:
         con.rollback()
@@ -268,7 +291,7 @@ def delete_student(elev_id):
         con.close()
 
 
-# --- 5. SUGESTII PENTRU ÎNSCRIERE CONCURS ---
+# --- 5. SUGESTII ---
 @elevi_bp.get("/api/profil/sugestii_inscriere")
 @token_required
 def sugestii_inscriere():
@@ -281,10 +304,12 @@ def sugestii_inscriere():
         cur.execute("SELECT id, rol, nume_complet FROM utilizatori WHERE username=%s", (username,))
         row = cur.fetchone()
         if not row: return jsonify({"status": "error", "message": "User not found"}), 404
+
         user_id = row['id']
         rol = (row['rol'] or "").lower()
         nume_propriu = row['nume_complet'] or username
         copii_list = []
+
         if rol in ['parinte', 'admin']:
             cur.execute("SELECT nume, grupa_text, data_nasterii, gen FROM copii WHERE id_parinte = %s", (user_id,))
             rows_copii = cur.fetchall()
