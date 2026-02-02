@@ -9,6 +9,7 @@ from backend.mails.evidenta_plati import evidenta_plati_bp
 from backend.competitions.numar_inscrisi import numar_inscrisi_bp
 from backend.competitions.creare_get_concurs import creare_get_concurs_bp
 from backend.users.inscrierile_mele import inscrierile_mele_bp
+from backend.users.prezente import prezente_bp
 from backend.users.sterge_duplicate import sterge_duplicate_bp
 from backend.users.toti_copiii_parintilor import toti_copiii_parintilor_bp
 from backend.users.toate_grupele_antrenori import toate_grupele_antrenori_bp
@@ -67,6 +68,7 @@ app.register_blueprint(elevi_bp)
 # app.register_blueprint(reparare_copii_bp)
 app.register_blueprint(sterge_duplicate_bp)
 app.register_blueprint(stare_concurs_bp)
+app.register_blueprint(prezente_bp)
 # app.register_blueprint(adaugare_fortata_bp)
 
 app.register_blueprint(inscrierile_mele_bp)
