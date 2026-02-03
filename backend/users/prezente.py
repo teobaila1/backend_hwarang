@@ -62,7 +62,7 @@ def scan_qr():
 
         if is_adult:
             # === CAZUL 1: ADULT (UTILIZATOR) ===
-            cur.execute("SELECT nume_complet, username, grupa FROM utilizatori WHERE id = %s", (qr_code,))
+            cur.execute("SELECT nume_complet, username, grupe FROM utilizatori WHERE id = %s", (qr_code,))
             row = cur.fetchone()
 
             if not row:
@@ -71,8 +71,8 @@ def scan_qr():
             nume_sportiv = row['nume_complet'] or row['username']
 
             # Luăm grupa reală din baza de date
-            if row['grupa'] and str(row['grupa']).strip():
-                grupa_sportiv = row['grupa']
+            if row['grupe'] and str(row['grupe']).strip():
+                grupa_sportiv = row['grupe']
             else:
                 grupa_sportiv = "Seniori/Adulti"
 
@@ -84,13 +84,13 @@ def scan_qr():
 
         else:
             # === CAZUL 2: COPIL (Această parte lipsea la tine) ===
-            cur.execute("SELECT nume, grupa FROM copii WHERE id = %s", (qr_code,))
+            cur.execute("SELECT nume, grupe_text FROM copii WHERE id = %s", (qr_code,))
             row = cur.fetchone()
             if not row:
                 return jsonify({"status": "error", "message": "Sportiv (Copil) negăsit."}), 404
 
             nume_sportiv = row['nume']
-            grupa_sportiv = row['grupa']
+            grupa_sportiv = row['grupe_text']
 
             # Inserăm prezența
             cur.execute("""
