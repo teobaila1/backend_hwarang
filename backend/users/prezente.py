@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-import pytz  # <--- IMPORT NOU
+import pytz
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from ..accounts.decorators import token_required
