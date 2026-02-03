@@ -36,13 +36,9 @@ _ensure_prezente_table()
 @prezente_bp.post("/api/prezenta/scan")
 @token_required
 def scan_qr():
-    """
-    Antrenorul scanează un cod QR.
-    Payload așteptat: { "qr_content": "ID_SPORTIV" }
-    """
     data = request.get_json(silent=True) or {}
-    qr_code = data.get("qr_code")  # Acesta este ID-ul sportivului
-    antrenor_id = data.get("antrenor_id")  # Sau il luam din token daca vrei, dar frontendul il poate trimite
+    qr_code = data.get("qr_code")
+    antrenor_id = data.get("antrenor_id")
 
     if not qr_code:
         return jsonify({"status": "error", "message": "Cod invalid"}), 400
@@ -51,52 +47,57 @@ def scan_qr():
     try:
         cur = con.cursor()
 
-        # 1. Identificăm tipul sportivului (Copil vs Adult)
-        # Logica noastră: Adulții au ID numeric (ex: 25), Copiii au UUID (lung)
         is_adult = str(qr_code).isdigit()
-
         nume_sportiv = ""
+        grupa_sportiv = None  # Variabila pentru grupă
 
         if is_adult:
-            # Verificăm dacă există adultul
+            # 1. Căutăm Adultul (User)
+            # Presupunem că userii nu au câmp 'grupa' explicit, dar dacă au, îl luăm de aici
             cur.execute("SELECT nume_complet, username FROM utilizatori WHERE id = %s", (qr_code,))
             row = cur.fetchone()
             if not row:
                 return jsonify({"status": "error", "message": "Sportiv (Adult) negăsit."}), 404
+
             nume_sportiv = row['nume_complet'] or row['username']
+            grupa_sportiv = "Seniori/Adulti"  # Sau poți lăsa NULL dacă nu au grupă
 
             # Inserăm prezența
             cur.execute("""
-                INSERT INTO prezente (id_sportiv_user, id_antrenor)
-                VALUES (%s, %s)
-            """, (qr_code, antrenor_id))
+                INSERT INTO prezente (id_sportiv_user, id_antrenor, nume_grupa)
+                VALUES (%s, %s, %s)
+            """, (qr_code, antrenor_id, grupa_sportiv))
 
         else:
-            # Verificăm dacă există copilul
-            cur.execute("SELECT nume FROM copii WHERE id = %s", (qr_code,))
+            # 2. Căutăm Copilul - AICI ESTE CHEIA
+            # Selectăm și coloana 'grupa' pe lângă nume
+            cur.execute("SELECT nume, grupa FROM copii WHERE id = %s", (qr_code,))
             row = cur.fetchone()
             if not row:
                 return jsonify({"status": "error", "message": "Sportiv (Copil) negăsit."}), 404
-            nume_sportiv = row['nume']
 
-            # Inserăm prezența
+            nume_sportiv = row['nume']
+            grupa_sportiv = row['grupa']  # <--- Luăm grupa din tabelul copii
+
+            # Inserăm prezența incluzând grupa
             cur.execute("""
-                INSERT INTO prezente (id_sportiv_copil, id_antrenor)
-                VALUES (%s, %s)
-            """, (qr_code, antrenor_id))
+                INSERT INTO prezente (id_sportiv_copil, id_antrenor, nume_grupa)
+                VALUES (%s, %s, %s)
+            """, (qr_code, antrenor_id, grupa_sportiv))
 
         con.commit()
 
-        # Returnăm numele ca antrenorul să vadă pe ecran "Prezență confirmată: Ion Popescu"
         return jsonify({
             "status": "success",
-            "message": f"Prezență înregistrată: {nume_sportiv}",
-            "nume": nume_sportiv
+            "message": f"Prezență: {nume_sportiv}",
+            "nume": nume_sportiv,
+            "grupa": grupa_sportiv
         }), 201
 
     except Exception as e:
         con.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"Eroare scan: {e}")  # Ajută la debugging
+        return jsonify({"status": "error", "message": "Eroare server"}), 500
     finally:
         con.close()
 
