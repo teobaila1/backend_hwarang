@@ -20,9 +20,7 @@ def _ensure_prezente_table():
                 id_sportiv_user INT,
                 id_antrenor INT,
                 nume_grupa TEXT,
-                id_alocare BIGINT, -- Coloana nouă de legătură
-
-                -- Legături (opțional le poți lăsa sau scoate pe cele vechi, dar cea nouă e importantă)
+                id_alocare BIGINT, 
                 CONSTRAINT fk_prezenta_alocare
                     FOREIGN KEY(id_alocare) 
                     REFERENCES sportivi_pe_grupe(id)
@@ -50,7 +48,6 @@ def scan_qr():
     if not qr_code:
         return jsonify({"status": "error", "message": "Cod invalid"}), 400
 
-    # Ora României
     try:
         tz_ro = pytz.timezone('Europe/Bucharest')
         acum_ro = datetime.now(tz_ro)
@@ -63,38 +60,31 @@ def scan_qr():
 
         is_adult = str(qr_code).isdigit()
         nume_sportiv = ""
-        nume_grupa_text = "Fara Grupa"
-        id_alocare_gasit = None  # Aici vom salva ID-ul din sportivi_pe_grupe
+        nume_grupa_text = ""  # Vom completa cu numele real
+        id_alocare_gasit = None
 
         if is_adult:
             # === 1. ADULT ===
-            # Pas A: Luăm numele din utilizatori
-            cur.execute("SELECT nume_complet, username FROM utilizatori WHERE id = %s", (qr_code,))
+            # FIX: Cerem și coloana 'grupe' ca să avem numele corect al grupei
+            cur.execute("SELECT nume_complet, username, grupe FROM utilizatori WHERE id = %s", (qr_code,))
             row_user = cur.fetchone()
             if not row_user:
                 return jsonify({"status": "error", "message": "Sportiv (Adult) negăsit."}), 404
+
             nume_sportiv = row_user['nume_complet'] or row_user['username']
 
-            # Pas B: Căutăm ALOCAREA în sportivi_pe_grupe
-            # Vrem să vedem dacă există în tabelul de legătură
-            cur.execute("""
-                SELECT id, id_grupa FROM sportivi_pe_grupe 
-                WHERE id_sportiv_user = %s
-            """, (qr_code,))
-            row_alocare = cur.fetchone()
-
-            if row_alocare:
-                id_alocare_gasit = row_alocare['id']  # ID-ul unic al rândului (Legătura)
-
-                # Opțional: Dacă ai un tabel 'grupe', poți lua numele de acolo folosind row_alocare['id_grupa']
-                # Deocamdată luăm textul din utilizatori ca fallback sau setăm manual
-                nume_grupa_text = "Seniori/Adulti (Alocat)"
+            # FIX: Folosim numele grupei din tabelul utilizatori, nu textul hardcodat
+            if row_user['grupe']:
+                nume_grupa_text = row_user['grupe']
             else:
-                # Dacă nu e alocat, poți alege să dai eroare sau să îl lași să treacă
-                # return jsonify({"status": "error", "message": "Sportivul nu este alocat niciunei grupe!"}), 400
-                nume_grupa_text = "Ne-alocat"
+                nume_grupa_text = "Fara Grupa"
 
-            # Pas C: Inserăm
+            # Căutăm ALOCAREA (pentru id_alocare)
+            cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (qr_code,))
+            row_alocare = cur.fetchone()
+            if row_alocare:
+                id_alocare_gasit = row_alocare['id']
+
             cur.execute("""
                 INSERT INTO prezente (id_sportiv_user, id_antrenor, nume_grupa, data_ora, id_alocare)
                 VALUES (%s, %s, %s, %s, %s)
@@ -102,28 +92,20 @@ def scan_qr():
 
         else:
             # === 2. COPIL ===
-            # Pas A: Luăm numele
             cur.execute("SELECT nume, grupa_text FROM copii WHERE id = %s", (qr_code,))
             row_copil = cur.fetchone()
             if not row_copil:
                 return jsonify({"status": "error", "message": "Sportiv (Copil) negăsit."}), 404
+
             nume_sportiv = row_copil['nume']
-            nume_grupa_text = row_copil['grupa_text']  # Păstrăm numele grupei text pentru afișare
+            nume_grupa_text = row_copil['grupa_text']  # Aici era deja bine
 
-            # Pas B: Căutăm ALOCAREA în sportivi_pe_grupe
-            cur.execute("""
-                SELECT id FROM sportivi_pe_grupe 
-                WHERE id_sportiv_copil = %s
-            """, (qr_code,))
+            # Căutăm ALOCAREA
+            cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (qr_code,))
             row_alocare = cur.fetchone()
-
             if row_alocare:
                 id_alocare_gasit = row_alocare['id']
-            else:
-                # E posibil ca un copil să aibă 'grupa_text' completat, dar să nu fie încă în tabelul de legătură
-                pass
 
-                # Pas C: Inserăm
             cur.execute("""
                 INSERT INTO prezente (id_sportiv_copil, id_antrenor, nume_grupa, data_ora, id_alocare)
                 VALUES (%s, %s, %s, %s, %s)
@@ -132,10 +114,14 @@ def scan_qr():
         con.commit()
 
         ora_form = acum_ro.strftime("%H:%M")
+
+        # FIX: Returnăm JSON-ul exact cum îl așteaptă frontend-ul (cu cheia 'nume')
         return jsonify({
             "status": "success",
             "message": f"Prezență: {nume_sportiv}",
-            "detalii": f"Grupa: {nume_grupa_text} | Ora: {ora_form}"
+            "nume": nume_sportiv,  # <--- Asta rezolvă 'undefined' pe telefon
+            "grupa": nume_grupa_text,  # <--- Asta arată grupa corectă
+            "ora": ora_form
         }), 201
 
     except Exception as e:
@@ -144,8 +130,6 @@ def scan_qr():
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         con.close()
-
-# Ruta istoric rămâne neschimbată
 
 
 @prezente_bp.get("/api/prezenta/istoric/<sportiv_id>")
