@@ -12,7 +12,6 @@ def _ensure_prezente_table():
     con = get_conn()
     try:
         cur = con.cursor()
-        # Notă: Dacă ai rulat deja ALTER TABLE manual, asta e ok.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS prezente (
                 id SERIAL PRIMARY KEY,
@@ -45,8 +44,12 @@ def scan_qr():
         return jsonify({"status": "error", "message": "Cod invalid"}), 400
 
     # --- CALCULĂM ORA ROMÂNIEI ---
-    tz_ro = pytz.timezone('Europe/Bucharest')
-    acum_ro = datetime.now(tz_ro)
+    try:
+        tz_ro = pytz.timezone('Europe/Bucharest')
+        acum_ro = datetime.now(tz_ro)
+    except Exception as e:
+        print(f"Eroare timezone: {e}")
+        acum_ro = datetime.now()  # Fallback
     # -----------------------------
 
     con = get_conn()
@@ -58,7 +61,7 @@ def scan_qr():
         grupa_sportiv = None
 
         if is_adult:
-            # 1. Căutăm Adultul și cerem explicit coloana 'grupa'
+            # === CAZUL 1: ADULT (UTILIZATOR) ===
             cur.execute("SELECT nume_complet, username, grupa FROM utilizatori WHERE id = %s", (qr_code,))
             row = cur.fetchone()
 
@@ -67,23 +70,37 @@ def scan_qr():
 
             nume_sportiv = row['nume_complet'] or row['username']
 
-            # --- MODIFICARE AICI ---
-            # Dacă userul are o grupă setată în baza de date, o folosim pe aia.
-            # Dacă nu (e NULL), punem "Seniori/Adulti" ca rezervă.
+            # Luăm grupa reală din baza de date
             if row['grupa'] and str(row['grupa']).strip():
                 grupa_sportiv = row['grupa']
             else:
                 grupa_sportiv = "Seniori/Adulti"
 
-                # Inserăm prezența
+            # Inserăm prezența
             cur.execute("""
-                        INSERT INTO prezente (id_sportiv_user, id_antrenor, nume_grupa, data_ora)
-                        VALUES (%s, %s, %s, %s)
-                    """, (qr_code, antrenor_id, grupa_sportiv, acum_ro))
+                INSERT INTO prezente (id_sportiv_user, id_antrenor, nume_grupa, data_ora)
+                VALUES (%s, %s, %s, %s)
+            """, (qr_code, antrenor_id, grupa_sportiv, acum_ro))
+
+        else:
+            # === CAZUL 2: COPIL (Această parte lipsea la tine) ===
+            cur.execute("SELECT nume, grupa FROM copii WHERE id = %s", (qr_code,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "Sportiv (Copil) negăsit."}), 404
+
+            nume_sportiv = row['nume']
+            grupa_sportiv = row['grupa']
+
+            # Inserăm prezența
+            cur.execute("""
+                INSERT INTO prezente (id_sportiv_copil, id_antrenor, nume_grupa, data_ora)
+                VALUES (%s, %s, %s, %s)
+            """, (qr_code, antrenor_id, grupa_sportiv, acum_ro))
 
         con.commit()
 
-        # Formatăm ora frumos pentru răspuns (ex: 18:30)
+        # Formatăm ora pentru răspunsul vizual (ex: 18:30)
         ora_form = acum_ro.strftime("%H:%M")
 
         return jsonify({
@@ -101,8 +118,6 @@ def scan_qr():
         con.close()
 
 
-# Partea cu istoric_prezente rămâne la fel,
-# sau o poți modifica să formateze data la afișare dacă vrei.
 @prezente_bp.get("/api/prezenta/istoric/<sportiv_id>")
 @token_required
 def istoric_prezente(sportiv_id):
@@ -125,7 +140,6 @@ def istoric_prezente(sportiv_id):
             """, (sportiv_id,))
 
         rows = cur.fetchall()
-        # Convertim la string simplu
         data = [str(r['data_ora']) for r in rows]
 
         return jsonify({"status": "success", "istoric": data}), 200
