@@ -29,6 +29,7 @@ def _ensure_calendar_table():
 _ensure_calendar_table()
 
 @calendar_club_bp.get("/api/calendar/evenimente")
+@token_required # ✅ Nimeni nu vede evenimentele fără login
 def get_events():
     con = get_conn()
     try:
