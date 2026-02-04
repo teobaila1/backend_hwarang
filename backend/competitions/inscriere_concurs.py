@@ -17,13 +17,23 @@ def inscriere_concurs():
 
     # 2. Date Sportiv
     nume_sportiv = (data.get("nume") or "").strip()
-    data_nasterii = (data.get("dataNasterii") or "").strip()
+
+    # --- FIX CRITIC: Convertim string-urile goale în NONE (NULL pentru SQL) ---
+    def clean_input(val):
+        if not val: return None
+        s = str(val).strip()
+        return s if s else None
+
+    data_nasterii = clean_input(data.get("dataNasterii"))
+
     # Atenție: Frontend trimite camelCase, Baza cere snake_case
-    categorie_varsta = (data.get("categorieVarsta") or data.get("categorie") or "").strip()
-    grad_centura = (data.get("gradCentura") or data.get("grad") or "").strip()
-    greutate = (data.get("greutate") or "").strip()
-    inaltime = (data.get("inaltime") or "").strip()
-    gen = (data.get("gen") or "").strip()
+    categorie_varsta = clean_input(data.get("categorieVarsta") or data.get("categorie"))
+    grad_centura = clean_input(data.get("gradCentura") or data.get("grad"))
+
+    # Pentru numere (greutate/inaltime), e vital să fie None dacă e gol, altfel crapă SQL-ul (integer vs "")
+    greutate = clean_input(data.get("greutate"))
+    inaltime = clean_input(data.get("inaltime"))
+    gen = clean_input(data.get("gen"))
 
     # Probe (poate veni ca listă sau string)
     probe_raw = data.get("probe")
@@ -42,22 +52,20 @@ def inscriere_concurs():
     try:
         cur = con.cursor()
 
-        # 4. Obținem Email-ul părintelui (Important pentru tabelul tău!)
+        # 4. Obținem Email-ul părintelui
         cur.execute("SELECT email FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (username,))
         row = cur.fetchone()
         if not row:
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
         email = row["email"]
 
-
-        # === ADAUGĂ ACEASTĂ VERIFICARE ===
+        # 5. Verificăm dacă înscrierile sunt deschise
         cur.execute("SELECT inscrieri_deschise FROM concursuri WHERE nume = %s", (concurs_nume,))
         status_row = cur.fetchone()
         if status_row and status_row['inscrieri_deschise'] is False:
             return jsonify({"status": "error", "message": "Înscrierile sunt ÎNCHISE pentru acest concurs."}), 403
 
-
-        # 5. Verificăm dacă e deja înscris la acest concurs (Prevenire duplicate)
+        # 6. Verificăm duplicate (deja înscris?)
         cur.execute("""
             SELECT id FROM inscrieri_concursuri 
             WHERE concurs = %s AND nume = %s
@@ -65,8 +73,7 @@ def inscriere_concurs():
         if cur.fetchone():
             return jsonify({"status": "error", "message": f"{nume_sportiv} este deja înscris la {concurs_nume}."}), 409
 
-        # 6. INSERAREA CORECTĂ (În tabelul inscrieri_concursuri)
-        # Ne asigurăm că există coloana inaltime (SQL fallback in scriptul de reparare, dar aici scriem)
+        # 7. INSERAREA CORECTĂ (Acum funcționează și cu câmpuri goale)
         cur.execute("""
             INSERT INTO inscrieri_concursuri
                 (email, username, concurs, nume, data_nasterii, 
@@ -78,12 +85,21 @@ def inscriere_concurs():
 
         con.commit()
 
-        trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
+        # Încercăm să trimitem email, dar nu blocăm totul dacă eșuează mailul
+        try:
+            trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
+        except Exception as e_mail:
+            print(f"Eroare trimitere mail: {e_mail}")
+
         return jsonify({"status": "success", "message": f"Înscriere reușită pentru {concurs_nume}!"}), 201
 
     except Exception as e:
         con.rollback()
         print(f"[INSCRIERE ERROR] {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # Mesaj mai prietenos pentru utilizator
+        msg = str(e)
+        if "invalid input syntax" in msg:
+            msg = "Verificați datele introduse (Greutate/Înălțime/Data)."
+        return jsonify({"status": "error", "message": msg}), 500
     finally:
         if con: con.close()
