@@ -3,6 +3,7 @@ from flask_cors import CORS
 from backend.accounts.autentificare import autentificare_bp
 from backend.club_calendar.calendar_club import calendar_club_bp
 from backend.competitions.stare_concurs import stare_concurs_bp
+from backend.mails.trimite_notificari_plata import notificari_plata_bp
 from backend.users.antrenori_externi import antrenori_externi_bp
 from backend.users.antrenor_dashboard_copii_parinti import antrenor_dashboard_copii_parinti_bp
 from backend.competitions.adauga_concurs import adauga_concurs_bp
@@ -75,6 +76,7 @@ app.register_blueprint(prezente_bp)
 app.register_blueprint(calendar_club_bp)
 app.register_blueprint(inscrierile_mele_bp)
 app.register_blueprint(admin_diagnostic_bp)
+app.register_blueprint(notificari_plata_bp)
 
 
 if __name__ == "__main__":
