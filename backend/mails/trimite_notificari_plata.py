@@ -1,23 +1,20 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
+import resend
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
 import sys
 
-# ================= CONFIGURARE (COMPLETEAZĂ AICI) =================
+# ================= CONFIGURARE =================
 
-# 1. Datele Bazei de Date (Supabase)
-# Le iei din Supabase -> Settings -> Database -> Connection String (URI)
-# ATENȚIE: Înlocuiește [YOUR-PASSWORD] cu parola reală de la Supabase
+# 1. Datele Bazei de Date (Supabase) - Rămân neschimbate
 DB_URL = "postgresql://postgres.scjjlhlavtxqidbxwson:Hwarang2025@aws-1-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
 
-# 2. Datele de Email (Din poza ta de cPanel)
-SMTP_HOST = "mail.hwarang.ro"  # Serverul de mail
-SMTP_PORT = 465  # Portul Securizat (SSL)
-SMTP_USER = "site@hwarang.ro"  # <--- Am ales acest cont din lista ta
-SMTP_PASSWORD = "8bqZt5EhKbzHgQa"  # <--- Parola setată de tine la butonul 'Manage'
+# 2. Configurare Resend
+resend.api_key = os.environ.get("RESEND_API_KEY")
+
+# Adresa de expediere (trebuie să fie domeniul verificat)
+SENDER_NAME = "ACS Hwarang Sibiu <site@hwarang.ro>"
 
 
 # ==================================================================
@@ -56,26 +53,22 @@ def trimite_email(destinatar, nume_parinte):
             <p>Cu respect,<br>
             <strong>Echipa ACS Hwarang Academy Sibiu</strong></p>
             <hr>
-            <small style="color: #777;">Acest email a fost generat automat de pe site@hwarang.ro.</small>
+            <small style="color: #777;">Acest email a fost generat automat prin platforma Hwarang.</small>
         </div>
     </body>
     </html>
     """
 
     try:
-        msg = MIMEMultipart()
-        msg['From'] = f"ACS Hwarang Sibiu <{SMTP_USER}>"
-        msg['To'] = destinatar
-        msg['Subject'] = subiect
-        msg.attach(MIMEText(mesaj_html, 'html'))
+        # TRIMITERE PRIN RESEND API
+        r = resend.Emails.send({
+            "from": SENDER_NAME,
+            "to": destinatar,
+            "subject": subiect,
+            "html": mesaj_html
+        })
 
-        # Aici se face autentificarea ca să nu fii marcat ca SPAM
-        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(SMTP_USER, destinatar, msg.as_string())
-        server.quit()
-
-        print(f"[SUCCES] Email trimis catre: {destinatar}")
+        print(f"[SUCCES] Email trimis catre: {destinatar} (ID: {r.get('id')})")
 
     except Exception as e:
         print(f"[EROARE] Nu s-a putut trimite la {destinatar}. Motiv: {e}")
@@ -83,6 +76,10 @@ def trimite_email(destinatar, nume_parinte):
 
 def job_notificare():
     print(f"--- START JOB NOTIFICARE ({datetime.now()}) ---")
+
+    if not resend.api_key:
+        print("[CRITIC] Nu am găsit RESEND_API_KEY în variabilele de mediu!")
+        return
 
     conn = None
     try:

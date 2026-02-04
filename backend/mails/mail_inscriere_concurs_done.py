@@ -1,20 +1,13 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
+import resend
 
-# --- CONFIGURARE SMTP (Preluată din trimite_notificari_plata.py) ---
-# Dacă aceste date sunt sensibile, ideal ar fi să le muți în .env
-SMTP_HOST = "mail.hwarang.ro"
-SMTP_PORT = 465  # SSL
-SMTP_USER = "site@hwarang.ro"
-# ATENȚIE: Asigură-te că parola este corectă (cea din trimite_notificari_plata.py)
-SMTP_PASSWORD = "8bqZt5EhKbzHgQa"
+# Preluăm cheia din Environment Variables (de pe Render)
+resend.api_key = os.environ.get("RESEND_API_KEY")
 
 
 def trimite_confirmare_inscriere(email_destinatar, nume_sportiv, nume_concurs, detalii_concurs=""):
     """
-    Trimite un email de confirmare părintelui/sportivului după înscrierea la concurs.
+    Trimite un email de confirmare prin API-ul Resend (nu este blocat de Render).
     """
     if not email_destinatar or "@" not in email_destinatar:
         print(f"[MAIL-SKIP] Email invalid: {email_destinatar}")
@@ -22,7 +15,6 @@ def trimite_confirmare_inscriere(email_destinatar, nume_sportiv, nume_concurs, d
 
     subiect = f"Confirmare Înscriere: {nume_concurs}"
 
-    # Mesajul HTML
     mesaj_html = f"""
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
@@ -44,29 +36,24 @@ def trimite_confirmare_inscriere(email_destinatar, nume_sportiv, nume_concurs, d
             <p>Mult succes la competiție!<br>
             <strong>Echipa ACS Hwarang Sibiu</strong></p>
             <hr>
-            <small style="color: #777;">Acest email a fost generat automat.</small>
+            <small style="color: #777;">Acest email a fost generat automat prin platforma Hwarang.</small>
         </div>
     </body>
     </html>
     """
 
     try:
-        # Construim email-ul
-        msg = MIMEMultipart()
-        msg['From'] = f"ACS Hwarang Sibiu <{SMTP_USER}>"
-        msg['To'] = email_destinatar
-        msg['Subject'] = subiect
-        msg.attach(MIMEText(mesaj_html, 'html'))
+        # TRIMITERE PRIN RESEND API
+        r = resend.Emails.send({
+            "from": "ACS Hwarang Sibiu <site@hwarang.ro>",
+            "to": email_destinatar,
+            "subject": subiect,
+            "html": mesaj_html
+        })
 
-        # Conectare și trimitere
-        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(SMTP_USER, email_destinatar, msg.as_string())
-        server.quit()
-
-        print(f"[MAIL-SUCCESS] Confirmare trimisă la {email_destinatar} pentru {nume_concurs}")
+        print(f"[MAIL-SUCCESS] Email trimis catre {email_destinatar} (ID: {r.get('id')})")
         return True
 
     except Exception as e:
-        print(f"[MAIL-ERROR] Nu s-a putut trimite confirmarea la {email_destinatar}: {e}")
+        print(f"[MAIL-ERROR] Resend API Error: {e}")
         return False
