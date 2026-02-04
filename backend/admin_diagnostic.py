@@ -8,32 +8,35 @@ admin_diagnostic_bp = Blueprint('admin_diagnostic', __name__)
 @admin_diagnostic_bp.get("/api/admin/diagnostic-date")
 @token_required
 def get_diagnostic_report():
+    # Verificare admin
     if getattr(request, 'user_role', '') != 'admin':
         return jsonify({"status": "error", "message": "Acces interzis!"}), 403
 
     con = get_conn()
-
     try:
+        # PASUL 1: Resetăm orice tranzacție blocată anterior
+        con.rollback()
+
         cur = con.cursor()
 
-        # 1. CEREM LISTA TUTUROR COLOANELOR DIN TABELUL 'copii'
-        cur.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'copii';
-        """)
-        columns = cur.fetchall()
+        # PASUL 2: Cerem 0 rânduri din tabelul copii.
+        # Asta nu încarcă date, dar ne dă numele coloanelor.
+        cur.execute("SELECT * FROM copii LIMIT 0")
 
-        # Le transformăm într-o listă ușor de citit
-        lista_coloane = [f"{col[0]} ({col[1]})" for col in columns]
+        # Extragem numele coloanelor din descrierea cursorului
+        nume_coloane = [desc[0] for desc in cur.description]
 
         return jsonify({
             "status": "success",
-            "mesaj": "Iata structura reala a tabelului COPII",
-            "coloane_gasite": lista_coloane
+            "mesaj": "Am reusit! Iata coloanele din tabelul COPII:",
+            "coloane_gasite": nume_coloane
         }), 200
 
     except Exception as e:
-        return jsonify({"status": "critical_error", "message": str(e)}), 500
+        # Returnăm eroarea completă (Tip + Mesaj) ca să nu mai primim doar '0'
+        return jsonify({
+            "status": "critical_error",
+            "message": f"{type(e).__name__}: {str(e)}"
+        }), 500
     finally:
         con.close()
