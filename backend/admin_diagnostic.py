@@ -4,39 +4,52 @@ from backend.accounts.decorators import token_required
 
 admin_diagnostic_bp = Blueprint('admin_diagnostic', __name__)
 
-
 @admin_diagnostic_bp.get("/api/admin/diagnostic-date")
 @token_required
 def get_diagnostic_report():
-    # Verificare admin
     if getattr(request, 'user_role', '') != 'admin':
         return jsonify({"status": "error", "message": "Acces interzis!"}), 403
 
     con = get_conn()
-    try:
-        # PASUL 1: Resetăm orice tranzacție blocată anterior
-        con.rollback()
+    report = {
+        "orfani": [],
+        "date_incomplete": [],
+        "errors": []
+    }
 
+    try:
         cur = con.cursor()
 
-        # PASUL 2: Cerem 0 rânduri din tabelul copii.
-        # Asta nu încarcă date, dar ne dă numele coloanelor.
-        cur.execute("SELECT * FROM copii LIMIT 0")
+        # TEST 1: CĂUTĂM COPII ORFANI (Folosind numele corect: id_parinte)
+        try:
+            cur.execute("""
+                SELECT c.id, c.nume, c.id_parinte 
+                FROM copii c 
+                LEFT JOIN utilizatori u ON c.id_parinte = u.id 
+                WHERE u.id IS NULL;
+            """)
+            report["orfani"] = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            report["errors"].append(f"Eroare la orfani: {str(e)}")
 
-        # Extragem numele coloanelor din descrierea cursorului
-        nume_coloane = [desc[0] for desc in cur.description]
+        # TEST 2: DATE INCOMPLETE (Verificăm doar data_nasterii momentan)
+        try:
+            # Am scos cnp/grad ca să nu crape dacă nu există coloanele
+            cur.execute("""
+                SELECT id, nume 
+                FROM copii 
+                WHERE data_nasterii IS NULL;
+            """)
+            report["date_incomplete"] = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            report["errors"].append(f"Eroare la date incomplete: {str(e)}")
 
         return jsonify({
             "status": "success",
-            "mesaj": "Am reusit! Iata coloanele din tabelul COPII:",
-            "coloane_gasite": nume_coloane
+            "report": report
         }), 200
 
     except Exception as e:
-        # Returnăm eroarea completă (Tip + Mesaj) ca să nu mai primim doar '0'
-        return jsonify({
-            "status": "critical_error",
-            "message": f"{type(e).__name__}: {str(e)}"
-        }), 500
+        return jsonify({"status": "critical_error", "message": str(e)}), 500
     finally:
         con.close()
