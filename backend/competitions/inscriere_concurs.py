@@ -86,7 +86,7 @@ def inscriere_concurs():
         # chiar dacă mailul durează 10 secunde sau eșuează.
         def send_async_email():
             try:
-                trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
+                trimite_confirmare_inscriere(email, username, concurs_nume)
             except Exception as e:
                 print(f"[MAIL BACKGROUND ERROR] {e}")
 
