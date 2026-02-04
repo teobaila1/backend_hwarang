@@ -21,7 +21,7 @@ from backend.document.upload_document import upload_document_bp
 from backend.competitions.inscriere_concurs import inscriere_concurs_bp
 from backend.users.toti_userii import toti_userii_bp
 from backend.accounts.inregistrare import inregistrare_bp
-from backend.accounts.inscriere import inscriere_bp
+# from backend.accounts.inscriere import inscriere_bp
 from backend.users.cereri_utilizatori import cereri_utilizatori_bp
 from backend.mails.modifica_rol import modifica_rol_bp
 from backend.competitions.stergere_concurs import stergere_concurs_bp
@@ -46,7 +46,7 @@ CORS(app, resources={r"/api/*": {"origins": [
 ]}})
 
 # app.register_blueprint(migrare_bp)
-app.register_blueprint(inscriere_bp)
+# app.register_blueprint(inscriere_bp)
 app.register_blueprint(autentificare_bp)
 app.register_blueprint(inregistrare_bp)
 app.register_blueprint(cereri_utilizatori_bp)
