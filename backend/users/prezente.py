@@ -40,10 +40,12 @@ _ensure_prezente_table()
 
 @prezente_bp.post("/api/prezenta/scan")
 @token_required
-def scan_qr():
+def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
     data = request.get_json(silent=True) or {}
     qr_code = data.get("qr_code")
-    antrenor_id = data.get("antrenor_id")
+
+    # ID-ul antrenorului care scanează
+    antrenor_id = current_user['id']
 
     if not qr_code:
         return jsonify({"status": "error", "message": "Cod invalid"}), 400
@@ -58,28 +60,26 @@ def scan_qr():
     try:
         cur = con.cursor()
 
+        # LOGICA PRINCIPALĂ:
+        # Dacă ID-ul e numeric (ex: 71), e ADULT.
+        # Dacă ID-ul e string lung (ex: a4b2...), e COPIL.
         is_adult = str(qr_code).isdigit()
+
         nume_sportiv = ""
-        nume_grupa_text = ""  # Vom completa cu numele real
+        nume_grupa_text = ""
         id_alocare_gasit = None
 
         if is_adult:
-            # === 1. ADULT ===
-            # FIX: Cerem și coloana 'grupe' ca să avem numele corect al grupei
+            # === 1. CAZUL ADULT (Părinte/Sportiv) ===
             cur.execute("SELECT nume_complet, username, grupe FROM utilizatori WHERE id = %s", (qr_code,))
             row_user = cur.fetchone()
             if not row_user:
                 return jsonify({"status": "error", "message": "Sportiv (Adult) negăsit."}), 404
 
             nume_sportiv = row_user['nume_complet'] or row_user['username']
+            nume_grupa_text = row_user['grupe'] or "Fara Grupa"
 
-            # FIX: Folosim numele grupei din tabelul utilizatori, nu textul hardcodat
-            if row_user['grupe']:
-                nume_grupa_text = row_user['grupe']
-            else:
-                nume_grupa_text = "Fara Grupa"
-
-            # Căutăm ALOCAREA (pentru id_alocare)
+            # Căutăm ALOCAREA folosind id_sportiv_user
             cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (qr_code,))
             row_alocare = cur.fetchone()
             if row_alocare:
@@ -91,16 +91,16 @@ def scan_qr():
             """, (qr_code, antrenor_id, nume_grupa_text, acum_ro, id_alocare_gasit))
 
         else:
-            # === 2. COPIL ===
+            # === 2. CAZUL COPIL ===
             cur.execute("SELECT nume, grupa_text FROM copii WHERE id = %s", (qr_code,))
             row_copil = cur.fetchone()
             if not row_copil:
                 return jsonify({"status": "error", "message": "Sportiv (Copil) negăsit."}), 404
 
             nume_sportiv = row_copil['nume']
-            nume_grupa_text = row_copil['grupa_text']  # Aici era deja bine
+            nume_grupa_text = row_copil['grupa_text']
 
-            # Căutăm ALOCAREA
+            # Căutăm ALOCAREA folosind id_sportiv_copil (care e un string UUID)
             cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (qr_code,))
             row_alocare = cur.fetchone()
             if row_alocare:
@@ -115,12 +115,11 @@ def scan_qr():
 
         ora_form = acum_ro.strftime("%H:%M")
 
-        # FIX: Returnăm JSON-ul exact cum îl așteaptă frontend-ul (cu cheia 'nume')
         return jsonify({
             "status": "success",
             "message": f"Prezență: {nume_sportiv}",
-            "nume": nume_sportiv,  # <--- Asta rezolvă 'undefined' pe telefon
-            "grupa": nume_grupa_text,  # <--- Asta arată grupa corectă
+            "nume": nume_sportiv,
+            "grupa": nume_grupa_text,
             "ora": ora_form
         }), 201
 
