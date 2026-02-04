@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from backend.accounts.decorators import token_required
+from backend.mails.mail_inscriere_concurs_done import trimite_confirmare_inscriere
 
 inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 
@@ -76,6 +77,8 @@ def inscriere_concurs():
               categorie_varsta, grad_centura, greutate, inaltime, probe, gen))
 
         con.commit()
+
+        trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
         return jsonify({"status": "success", "message": f"Înscriere reușită pentru {concurs_nume}!"}), 201
 
     except Exception as e:
