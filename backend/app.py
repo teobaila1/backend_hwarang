@@ -27,6 +27,7 @@ from backend.competitions.stergere_concurs import stergere_concurs_bp
 from backend.passwords.resetare_parola import resetare_bp
 from backend.users.parinti import parinti_bp
 from backend.users.elevi import elevi_bp
+from backend.admin_diagnostic import admin_diagnostic_bp
 
 # from backend.migrare_copii import migrare_bp
 # from backend.users.reparare_copii import reparare_copii_bp
@@ -72,7 +73,9 @@ app.register_blueprint(stare_concurs_bp)
 app.register_blueprint(prezente_bp)
 # app.register_blueprint(adaugare_fortata_bp)
 app.register_blueprint(calendar_club_bp)
-
 app.register_blueprint(inscrierile_mele_bp)
+app.register_blueprint(admin_diagnostic_bp)
+
+
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
