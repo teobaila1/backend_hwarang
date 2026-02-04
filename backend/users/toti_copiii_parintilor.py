@@ -74,7 +74,7 @@ def toti_copiii():
             # Calculăm vârsta pentru afișare în tabel
             varsta_calc = _calc_age(r['data_nasterii'])
 
-            # Pregătim data pentru calendar (YYYY-MM-DD)
+            # Pregătim data pentru club_calendar (YYYY-MM-DD)
             dn_str = str(r['data_nasterii']) if r['data_nasterii'] else ""
 
             # Reparăm Genul (m -> M)

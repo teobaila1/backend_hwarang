@@ -21,7 +21,7 @@ def _ensure_calendar_table():
         """)
         con.commit()
     except Exception as e:
-        print(f"Eroare tabel calendar: {e}")
+        print(f"Eroare tabel club_calendar: {e}")
         con.rollback()
     finally:
         con.close()
