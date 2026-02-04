@@ -40,12 +40,12 @@ _ensure_prezente_table()
 
 @prezente_bp.post("/api/prezenta/scan")
 @token_required
-def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
+def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
     data = request.get_json(silent=True) or {}
     qr_code = data.get("qr_code")
 
-    # ID-ul antrenorului care scanează
-    antrenor_id = current_user['id']
+    # ID-ul antrenorului vine din request (pus de decoratorul token_required)
+    antrenor_id = getattr(request, 'user_id', None)
 
     if not qr_code:
         return jsonify({"status": "error", "message": "Cod invalid"}), 400
@@ -60,9 +60,7 @@ def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
     try:
         cur = con.cursor()
 
-        # LOGICA PRINCIPALĂ:
-        # Dacă ID-ul e numeric (ex: 71), e ADULT.
-        # Dacă ID-ul e string lung (ex: a4b2...), e COPIL.
+        # Detecție: Dacă ID-ul are doar cifre -> ADULT. Dacă are litere -> COPIL.
         is_adult = str(qr_code).isdigit()
 
         nume_sportiv = ""
@@ -70,7 +68,7 @@ def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
         id_alocare_gasit = None
 
         if is_adult:
-            # === 1. CAZUL ADULT (Părinte/Sportiv) ===
+            # === 1. CAZUL ADULT ===
             cur.execute("SELECT nume_complet, username, grupe FROM utilizatori WHERE id = %s", (qr_code,))
             row_user = cur.fetchone()
             if not row_user:
@@ -79,7 +77,6 @@ def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
             nume_sportiv = row_user['nume_complet'] or row_user['username']
             nume_grupa_text = row_user['grupe'] or "Fara Grupa"
 
-            # Căutăm ALOCAREA folosind id_sportiv_user
             cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_user = %s", (qr_code,))
             row_alocare = cur.fetchone()
             if row_alocare:
@@ -100,7 +97,6 @@ def scan_qr(current_user):  # Primim userul (antrenorul) din decorator
             nume_sportiv = row_copil['nume']
             nume_grupa_text = row_copil['grupa_text']
 
-            # Căutăm ALOCAREA folosind id_sportiv_copil (care e un string UUID)
             cur.execute("SELECT id FROM sportivi_pe_grupe WHERE id_sportiv_copil = %s", (qr_code,))
             row_alocare = cur.fetchone()
             if row_alocare:
