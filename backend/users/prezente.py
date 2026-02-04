@@ -3,7 +3,7 @@ from datetime import datetime
 import pytz
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
-from ..accounts.decorators import token_required
+from backend.accounts.decorators import token_required
 
 prezente_bp = Blueprint("prezente", __name__)
 
@@ -38,13 +38,15 @@ def _ensure_prezente_table():
 _ensure_prezente_table()
 
 
+# --- SCANARE QR (Reparată: Fără argumente, ia userul din request) ---
 @prezente_bp.post("/api/prezenta/scan")
 @token_required
-def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
+def scan_qr():
+    # NU punem parametri la funcție (def scan_qr():), luăm din request
     data = request.get_json(silent=True) or {}
     qr_code = data.get("qr_code")
 
-    # ID-ul antrenorului vine din request (pus de decoratorul token_required)
+    # ID-ul antrenorului este pus pe request de decoratorul @token_required
     antrenor_id = getattr(request, 'user_id', None)
 
     if not qr_code:
@@ -60,7 +62,7 @@ def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
     try:
         cur = con.cursor()
 
-        # Detecție: Dacă ID-ul are doar cifre -> ADULT. Dacă are litere -> COPIL.
+        # Logică: Cifre = Adult, Litere = Copil
         is_adult = str(qr_code).isdigit()
 
         nume_sportiv = ""
@@ -68,7 +70,7 @@ def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
         id_alocare_gasit = None
 
         if is_adult:
-            # === 1. CAZUL ADULT ===
+            # === ADULT ===
             cur.execute("SELECT nume_complet, username, grupe FROM utilizatori WHERE id = %s", (qr_code,))
             row_user = cur.fetchone()
             if not row_user:
@@ -88,7 +90,7 @@ def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
             """, (qr_code, antrenor_id, nume_grupa_text, acum_ro, id_alocare_gasit))
 
         else:
-            # === 2. CAZUL COPIL ===
+            # === COPIL ===
             cur.execute("SELECT nume, grupa_text FROM copii WHERE id = %s", (qr_code,))
             row_copil = cur.fetchone()
             if not row_copil:
@@ -108,7 +110,6 @@ def scan_qr():  # <--- FIX: Am scos parametrul 'current_user' care dadea eroare
             """, (qr_code, antrenor_id, nume_grupa_text, acum_ro, id_alocare_gasit))
 
         con.commit()
-
         ora_form = acum_ro.strftime("%H:%M")
 
         return jsonify({
@@ -136,21 +137,14 @@ def istoric_prezente(sportiv_id):
         is_adult = str(sportiv_id).isdigit()
 
         if is_adult:
-            cur.execute("""
-                SELECT data_ora FROM prezente 
-                WHERE id_sportiv_user = %s 
-                ORDER BY data_ora DESC LIMIT 50
-            """, (sportiv_id,))
+            cur.execute("SELECT data_ora FROM prezente WHERE id_sportiv_user = %s ORDER BY data_ora DESC LIMIT 50",
+                        (sportiv_id,))
         else:
-            cur.execute("""
-                SELECT data_ora FROM prezente 
-                WHERE id_sportiv_copil = %s 
-                ORDER BY data_ora DESC LIMIT 50
-            """, (sportiv_id,))
+            cur.execute("SELECT data_ora FROM prezente WHERE id_sportiv_copil = %s ORDER BY data_ora DESC LIMIT 50",
+                        (sportiv_id,))
 
         rows = cur.fetchall()
         data = [str(r['data_ora']) for r in rows]
-
         return jsonify({"status": "success", "istoric": data}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
