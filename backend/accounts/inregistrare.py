@@ -54,7 +54,7 @@ def trimite_email_acceptare(destinatar: str, username: str):
         <h2 style="color: green;">Cerere Acceptată!</h2>
         <p>Salut, {username}!</p>
         <p>Cererea ta a fost aprobată. Acum te poți autentifica pe site.</p>
-        <a href="https://hwarang.ro/login">Mergi la Login</a>
+        <a href="https://hwarang.ro/autentificare">Mergi la Login</a>
     """
     _send_via_resend(destinatar, "Cerere acceptată - ACS Hwarang", html)
 
