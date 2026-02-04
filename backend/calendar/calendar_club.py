@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify
 from backend.config import get_conn
-from backend.accounts.decorators import token_required, admin_required
-import datetime
+from backend.accounts.decorators import token_required
 
 calendar_club_bp = Blueprint('calendar_club', __name__)
 
@@ -18,7 +17,7 @@ def _ensure_calendar_table():
                 data_sfarsit TIMESTAMP,
                 locatie TEXT,
                 descriere TEXT,
-                tip_eveniment TEXT DEFAULT 'General'
+                tip_eveniment TEXT DEFAULT 'Competitie' 
             )
         """)
         con.commit()
@@ -32,14 +31,12 @@ def _ensure_calendar_table():
 _ensure_calendar_table()
 
 
-# --- 1. LISTARE EVENIMENTE (Public sau User Logat) ---
+# --- 1. LISTARE (Public) ---
 @calendar_club_bp.get("/api/calendar/evenimente")
 def get_events():
     con = get_conn()
     try:
         cur = con.cursor()
-        # Luăm evenimentele viitoare (sau toate, depinde cum vrei)
-        # Aici luăm tot și filtrăm în frontend sau punem WHERE data_start >= NOW()
         cur.execute("SELECT * FROM calendar_club ORDER BY data_start ASC")
         rows = cur.fetchall()
 
@@ -48,7 +45,7 @@ def get_events():
             events.append({
                 "id": r['id'],
                 "titlu": r['titlu'],
-                "start": str(r['data_start']),  # Format ISO pt calendar frontend
+                "start": str(r['data_start']),
                 "end": str(r['data_sfarsit']) if r['data_sfarsit'] else None,
                 "locatie": r['locatie'],
                 "descriere": r['descriere'],
@@ -61,21 +58,20 @@ def get_events():
         con.close()
 
 
-# --- 2. ADĂUGARE EVENIMENT (Doar Admin/Antrenor) ---
+# --- 2. ADĂUGARE (Doar Admin) ---
 @calendar_club_bp.post("/api/calendar/evenimente")
 @token_required
-@admin_required  # Sau permite și antrenorilor
 def add_event():
+    # Verificăm rolul din request (pus de decorator)
+    if getattr(request, 'user_role', '') != 'admin':
+        return jsonify({"status": "error", "message": "Doar adminul poate adăuga evenimente!"}), 403
+
     data = request.get_json() or {}
     titlu = data.get("titlu")
-    start = data.get("start")  # Așteptăm format YYYY-MM-DD HH:MM
-    end = data.get("end")
-    locatie = data.get("locatie")
-    descriere = data.get("descriere")
-    tip = data.get("tip") or "General"
+    start = data.get("start")
 
     if not titlu or not start:
-        return jsonify({"status": "error", "message": "Titlul și Data de start sunt obligatorii"}), 400
+        return jsonify({"status": "error", "message": "Titlu și Data Start sunt obligatorii"}), 400
 
     con = get_conn()
     try:
@@ -83,7 +79,7 @@ def add_event():
         cur.execute("""
             INSERT INTO calendar_club (titlu, data_start, data_sfarsit, locatie, descriere, tip_eveniment)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (titlu, start, end, locatie, descriere, tip))
+        """, (titlu, start, data.get("end"), data.get("locatie"), data.get("descriere"), data.get("tip")))
         con.commit()
         return jsonify({"status": "success", "message": "Eveniment adăugat!"}), 201
     except Exception as e:
@@ -93,11 +89,13 @@ def add_event():
         con.close()
 
 
-# --- 3. ȘTERGERE EVENIMENT ---
+# --- 3. ȘTERGERE (Doar Admin) ---
 @calendar_club_bp.delete("/api/calendar/evenimente/<int:event_id>")
 @token_required
-@admin_required
 def delete_event(event_id):
+    if getattr(request, 'user_role', '') != 'admin':
+        return jsonify({"status": "error", "message": "Acces interzis!"}), 403
+
     con = get_conn()
     try:
         cur = con.cursor()
