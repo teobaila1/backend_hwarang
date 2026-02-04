@@ -7,53 +7,69 @@ admin_diagnostic_bp = Blueprint('admin_diagnostic', __name__)
 @admin_diagnostic_bp.get("/api/admin/diagnostic-date")
 @token_required
 def get_diagnostic_report():
-    # Verificăm dacă utilizatorul este admin
     if getattr(request, 'user_role', '') != 'admin':
-        return jsonify({"status": "error", "message": "Acces interzis! Doar adminul poate accesa acest raport."}), 403
+        return jsonify({"status": "error", "message": "Acces interzis!"}), 403
 
     con = get_conn()
     report = {
-        "orfani": [],          # Copii care au un parent_id care nu mai există
-        "date_incomplete": [], # Copii cărora le lipsesc date obligatorii pentru concurs
-        "roluri_incorecte": [] # Utilizatori care au copii dar nu au rolul de 'Parinte'
+        "orfani": [],
+        "date_incomplete": [],
+        "roluri_incorecte": [],
+        "errors": [] # Aici vom salva erorile tehnice
     }
 
     try:
         cur = con.cursor()
 
-        # 1. Identificăm copiii cu parent_id inexistent în tabela utilizatori
-        cur.execute("""
-            SELECT c.id, c.nume, c.parent_id 
-            FROM copii c 
-            LEFT JOIN utilizatori u ON c.parent_id = u.id 
-            WHERE u.id IS NULL;
-        """)
-        report["orfani"] = [dict(r) for r in cur.fetchall()]
+        # TEST 1: COPII ORFANI (Verificăm separat să vedem unde crapă)
+        try:
+            # Verificăm întâi dacă există tabela 'utilizatori' sau 'users'
+            cur.execute("SELECT to_regclass('public.utilizatori')")
+            if cur.fetchone()[0] is None:
+                report["errors"].append("Tabela 'utilizatori' NU există! Verifică numele (poate e 'users'?)")
+            else:
+                cur.execute("""
+                    SELECT c.id, c.nume, c.parent_id 
+                    FROM copii c 
+                    LEFT JOIN utilizatori u ON c.parent_id = u.id 
+                    WHERE u.id IS NULL;
+                """)
+                report["orfani"] = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            report["errors"].append(f"Eroare la verificarea orfanilor: {str(e)}")
 
-        # 2. Identificăm sportivii cu date incomplete (CNP, Grad, Data Nașterii)
-        cur.execute("""
-            SELECT id, nume, parent_id 
-            FROM copii 
-            WHERE cnp IS NULL OR grad IS NULL OR data_nasterii IS NULL;
-        """)
-        report["date_incomplete"] = [dict(r) for r in cur.fetchall()]
+        # TEST 2: DATE INCOMPLETE (Aici e riscul mare de nume greșit la coloane)
+        try:
+            # Încercăm o interogare simplă
+            cur.execute("""
+                SELECT id, nume, parent_id 
+                FROM copii 
+                WHERE cnp IS NULL OR grad IS NULL OR data_nasterii IS NULL;
+            """)
+            report["date_incomplete"] = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            # Dacă crapă, înseamnă că una din coloane are alt nume
+            report["errors"].append(f"Eroare la date incomplete (posibil nume coloană greșit): {str(e)}")
 
-        # 3. Identificăm părinții care au copii dar nu au rolul corect
-        cur.execute("""
-            SELECT id, username, rol 
-            FROM utilizatori 
-            WHERE id IN (SELECT DISTINCT parent_id FROM copii) 
-            AND rol NOT IN ('Parinte', 'admin');
-        """)
-        report["roluri_incorecte"] = [dict(r) for r in cur.fetchall()]
+        # TEST 3: ROLURI
+        try:
+            cur.execute("""
+                SELECT id, username, rol 
+                FROM utilizatori 
+                WHERE id IN (SELECT DISTINCT parent_id FROM copii) 
+                AND rol NOT IN ('Parinte', 'admin');
+            """)
+            report["roluri_incorecte"] = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            report["errors"].append(f"Eroare la verificarea rolurilor: {str(e)}")
 
+        # Returnăm 200 OK chiar dacă au fost erori interne, ca să le vedem în consolă
         return jsonify({
             "status": "success",
             "report": report
         }), 200
 
-
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "critical_error", "message": str(e)}), 200
     finally:
         con.close()
