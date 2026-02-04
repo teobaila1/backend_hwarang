@@ -2,9 +2,9 @@ from flask import Blueprint, request, jsonify
 from backend.config import get_conn
 from backend.accounts.decorators import token_required
 from backend.mails.mail_inscriere_concurs_done import trimite_confirmare_inscriere
+from threading import Thread  # <--- IMPORT NECESAR (NOU)
 
 inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
-
 
 @inscriere_concurs_bp.post('/api/inscriere_concurs')
 @token_required
@@ -18,19 +18,15 @@ def inscriere_concurs():
     # 2. Date Sportiv
     nume_sportiv = (data.get("nume") or "").strip()
 
-    # --- FIX CRITIC: Convertim string-urile goale în NONE (NULL pentru SQL) ---
+    # --- Funcție helper pentru curățare ---
     def clean_input(val):
         if not val: return None
         s = str(val).strip()
         return s if s else None
 
     data_nasterii = clean_input(data.get("dataNasterii"))
-
-    # Atenție: Frontend trimite camelCase, Baza cere snake_case
     categorie_varsta = clean_input(data.get("categorieVarsta") or data.get("categorie"))
     grad_centura = clean_input(data.get("gradCentura") or data.get("grad"))
-
-    # Pentru numere (greutate/inaltime), e vital să fie None dacă e gol, altfel crapă SQL-ul (integer vs "")
     greutate = clean_input(data.get("greutate"))
     inaltime = clean_input(data.get("inaltime"))
     gen = clean_input(data.get("gen"))
@@ -73,7 +69,7 @@ def inscriere_concurs():
         if cur.fetchone():
             return jsonify({"status": "error", "message": f"{nume_sportiv} este deja înscris la {concurs_nume}."}), 409
 
-        # 7. INSERAREA CORECTĂ (Acum funcționează și cu câmpuri goale)
+        # 7. INSERAREA ÎN BAZA DE DATE
         cur.execute("""
             INSERT INTO inscrieri_concursuri
                 (email, username, concurs, nume, data_nasterii, 
@@ -85,18 +81,23 @@ def inscriere_concurs():
 
         con.commit()
 
-        # Încercăm să trimitem email, dar nu blocăm totul dacă eșuează mailul
-        try:
-            trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
-        except Exception as e_mail:
-            print(f"Eroare trimitere mail: {e_mail}")
+        # --- 8. FIX ASINCRON: Trimitem mailul în fundal ---
+        # Asta asigură că utilizatorul primește răspunsul "Succes" INSTANT,
+        # chiar dacă mailul durează 10 secunde sau eșuează.
+        def send_async_email():
+            try:
+                trimite_confirmare_inscriere(email, nume_sportiv, concurs_nume)
+            except Exception as e:
+                print(f"[MAIL BACKGROUND ERROR] {e}")
+
+        Thread(target=send_async_email).start()
+        # --------------------------------------------------
 
         return jsonify({"status": "success", "message": f"Înscriere reușită pentru {concurs_nume}!"}), 201
 
     except Exception as e:
         con.rollback()
         print(f"[INSCRIERE ERROR] {e}")
-        # Mesaj mai prietenos pentru utilizator
         msg = str(e)
         if "invalid input syntax" in msg:
             msg = "Verificați datele introduse (Greutate/Înălțime/Data)."
