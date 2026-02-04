@@ -63,15 +63,20 @@ def extract_data_start(perioada: str):
 @creare_get_concurs_bp.get('/api/concursuri')
 def get_concursuri():
     con = get_conn()
-    # 1. ADAGĂ 'inscrieri_deschise' AICI ÎN SELECT:
-    rows = con.execute("SELECT nume, perioada, locatie, cere_inaltime, inscrieri_deschise FROM concursuri").fetchall()
+
+    # --- MODIFICARE AICI: Am adăugat "ORDER BY id DESC" ---
+    # Asta face ca ultimul concurs adăugat să apară primul în listă.
+    rows = con.execute("""
+        SELECT nume, perioada, locatie, cere_inaltime, inscrieri_deschise 
+        FROM concursuri 
+        ORDER BY id DESC
+    """).fetchall()
 
     data = [{
         "nume": r["nume"],
         "perioada": r["perioada"],
         "locatie": r["locatie"],
         "cere_inaltime": r["cere_inaltime"],
-        # 2. ADAGĂ ASTA ÎN RĂSPUNS (Dacă e Null, punem True implicit):
         "inscrieri_deschise": r["inscrieri_deschise"] if r["inscrieri_deschise"] is not None else True,
         "dataStart": extract_data_start(r["perioada"])
     } for r in rows]
