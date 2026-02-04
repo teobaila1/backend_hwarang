@@ -5,7 +5,7 @@ import resend
 resend.api_key = os.environ.get("RESEND_API_KEY")
 
 
-def trimite_confirmare_inscriere(email_destinatar, nume_sportiv, nume_concurs, detalii_concurs=""):
+def trimite_confirmare_inscriere(email_destinatar, nume_utilizator, nume_concurs, detalii_concurs=""):
     """
     Trimite un email de confirmare prin API-ul Resend (nu este blocat de Render).
     """
@@ -21,7 +21,7 @@ def trimite_confirmare_inscriere(email_destinatar, nume_sportiv, nume_concurs, d
         <div style="max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
             <h2 style="color: #d32f2f; text-align: center;">Înscriere Confirmată!</h2>
 
-            <p>Salut, <strong>{nume_sportiv}</strong>!</p>
+            <p>Salut, <strong>{nume_utilizator}</strong>!</p>
 
             <p>Îți confirmăm cu succes înscrierea la concursul:</p>
             <h3 style="background-color: #f4f4f4; padding: 10px; border-left: 5px solid #d32f2f;">
