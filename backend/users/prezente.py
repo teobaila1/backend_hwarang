@@ -243,3 +243,64 @@ def get_prezenta_grupa(id_grupa):
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         con.close()
+
+
+# --- 4. CALENDAR PREZENȚE PENTRU UN SINGUR COPIL (PENTRU PĂRINȚI) ---
+@prezente_bp.get("/api/prezenta/copil_calendar/<string:id_copil>")
+@token_required
+def get_prezenta_copil_calendar(id_copil):
+    """
+    Returnează datele calendaristice (zilele 1..31) pentru un singur copil.
+    Formatul este identic cu cel de la grupă, dar lista conține un singur element.
+    """
+    azi = datetime.now()
+    try:
+        luna = int(request.args.get('luna', azi.month))
+        an = int(request.args.get('an', azi.year))
+    except:
+        luna = azi.month
+        an = azi.year
+
+    con = get_conn()
+    try:
+        cur = con.cursor()
+
+        # 1. Luăm datele copilului
+        cur.execute("SELECT id, nume FROM copii WHERE id = %s", (id_copil,))
+        copil = cur.fetchone()
+
+        if not copil:
+            return jsonify({"status": "error", "message": "Copil negăsit"}), 404
+
+        # 2. Luăm ZILELE exacte din luna respectivă
+        cur.execute("""
+            SELECT EXTRACT(DAY FROM data_ora) as zi
+            FROM prezente 
+            WHERE id_sportiv_copil = %s 
+              AND EXTRACT(MONTH FROM data_ora) = %s
+              AND EXTRACT(YEAR FROM data_ora) = %s
+            ORDER BY data_ora ASC
+        """, (id_copil, luna, an))
+
+        rows_zile = cur.fetchall()
+        zile_prezente = [int(r['zi']) for r in rows_zile]
+
+        # Returnăm o listă cu un singur obiect (pentru a fi compatibil cu TabelPrezenta)
+        rezultat = [{
+            "id": copil['id'],
+            "nume": copil['nume'],
+            "tip": "copil",
+            "zile": zile_prezente,
+            "total": len(zile_prezente)
+        }]
+
+        return jsonify({
+            "status": "success",
+            "data": rezultat,
+            "meta": {"luna": luna, "an": an}
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        con.close()
