@@ -169,20 +169,28 @@ def istoric_prezente(sportiv_id):
         con.close()
 
 
-# --- 3. RAPORT GRUPĂ PENTRU ANTRENOR (NOU!) ---
 @prezente_bp.get("/api/prezenta/grupa/<int:id_grupa>")
 @token_required
 def get_prezenta_grupa(id_grupa):
     """
-    Returnează lista sportivilor din grupă + sumarul prezențelor (Total luna asta + Ultimele date).
-    Folosit în Dashboard Antrenor -> Secțiunea Grupe.
+    Returnează lista sportivilor și zilele exacte (1..31) în care au fost prezenți
+    pentru luna și anul specificat.
     """
+    # Citim luna și anul din URL (ex: ?luna=2&an=2026)
+    # Dacă lipsesc, luăm luna curentă
+    azi = datetime.now()
+    try:
+        luna = int(request.args.get('luna', azi.month))
+        an = int(request.args.get('an', azi.year))
+    except:
+        luna = azi.month
+        an = azi.year
+
     con = get_conn()
     try:
         cur = con.cursor()
 
-        # A. Luăm toți sportivii din grupa respectivă
-        # (Copii + Adulți, folosind tabelul de legătură)
+        # 1. Luăm toți sportivii din grupă
         cur.execute("""
             SELECT 
                 COALESCE(c.id, CAST(u.id AS TEXT)) as id_sportiv,
@@ -196,51 +204,40 @@ def get_prezenta_grupa(id_grupa):
         """, (id_grupa,))
         sportivi = cur.fetchall()
 
-        if not sportivi:
-            return jsonify({"status": "success", "data": []}), 200
-
         rezultate = []
-
-        # B. Pentru fiecare sportiv, numărăm prezențele și luăm ultimele date
-        # (Aceasta nu e cea mai optimă metodă SQL, dar e sigură și ușor de înțeles)
 
         for s in sportivi:
             sid = s['id_sportiv']
             stip = s['tip']
-
             col_where = "id_sportiv_copil" if stip == 'copil' else "id_sportiv_user"
 
-            # 1. Total prezențe luna curentă
+            # 2. Luăm ZILELE exacte din luna respectivă când a fost prezent
+            # Returnează ex: [2, 5, 12, 14]
             cur.execute(f"""
-                SELECT COUNT(*) as total 
+                SELECT EXTRACT(DAY FROM data_ora) as zi
                 FROM prezente 
                 WHERE {col_where} = %s 
-                  AND EXTRACT(MONTH FROM data_ora) = EXTRACT(MONTH FROM CURRENT_DATE)
-                  AND EXTRACT(YEAR FROM data_ora) = EXTRACT(YEAR FROM CURRENT_DATE)
-            """, (sid,))
-            total_luna = cur.fetchone()['total']
+                  AND EXTRACT(MONTH FROM data_ora) = %s
+                  AND EXTRACT(YEAR FROM data_ora) = %s
+                ORDER BY data_ora ASC
+            """, (sid, luna, an))
 
-            # 2. Ultimele 3 prezențe
-            cur.execute(f"""
-                SELECT data_ora 
-                FROM prezente 
-                WHERE {col_where} = %s 
-                ORDER BY data_ora DESC 
-                LIMIT 3
-            """, (sid,))
-            ultimele_rows = cur.fetchall()
-
-            ultimele_date = [r['data_ora'].strftime("%d.%m") for r in ultimele_rows]
+            rows_zile = cur.fetchall()
+            zile_prezente = [int(r['zi']) for r in rows_zile]  # Lista de int-uri [5, 12, 20]
 
             rezultate.append({
                 "id": sid,
                 "nume": s['nume'],
                 "tip": stip,
-                "prezente_luna": total_luna,
-                "ultimele_date": ", ".join(ultimele_date) if ultimele_date else "-"
+                "zile": zile_prezente,  # Trimitem lista de zile către React
+                "total": len(zile_prezente)
             })
 
-        return jsonify({"status": "success", "data": rezultate}), 200
+        return jsonify({
+            "status": "success",
+            "data": rezultate,
+            "meta": {"luna": luna, "an": an}
+        }), 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
