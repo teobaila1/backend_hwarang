@@ -163,6 +163,7 @@ def antrenor_dashboard_data():
             for pid, val in map_familii.items():
                 results.append({
                     "grupa": g_nume,
+                    "grupa_id": g_id,
                     "parinte": val["parinte"],
                     "copii": val["copii"]
                 })
