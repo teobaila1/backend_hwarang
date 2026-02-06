@@ -12,7 +12,7 @@ inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 def inscriere_concurs():
     data = request.get_json(silent=True) or {}
 
-    # 1. Date de identificare
+    # 1. Date de identificare (Parent)
     username_input = (data.get('username') or '').strip()
     concurs_nume = (data.get('concurs') or '').strip()
 
@@ -47,45 +47,51 @@ def inscriere_concurs():
     try:
         cur = con.cursor()
 
-        # 4. Obținem Email-ul și Username-ul CORECT (casing) din bază
-        # Asta repară cazul când frontend trimite "user" dar în bază e "User"
+        # 4. Obținem Email-ul și USERNAME-UL REAL (din DB)
+        # (Rezolvă problema cu litere mari/mici de la telefon)
         cur.execute("SELECT email, username FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (username_input,))
         row = cur.fetchone()
+
         if not row:
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
 
         email = row["email"]
-        username_real = row["username"]  # Folosim exact ce e în baza de date
+        real_username = row["username"]
 
-        # 5. Verificăm concursul (FIX CRITIC AICI)
+        # 5. Verificăm existența concursului (Fix critic pentru concursuri fantomă)
         cur.execute("SELECT inscrieri_deschise FROM concursuri WHERE nume = %s", (concurs_nume,))
         status_row = cur.fetchone()
 
-        # DACĂ CONCURSUL NU EXISTĂ -> EROARE
         if not status_row:
-            return jsonify(
-                {"status": "error", "message": f"Concursul '{concurs_nume}' nu a fost găsit în baza de date."}), 404
+            return jsonify({"status": "error",
+                            "message": f"Eroare: Concursul '{concurs_nume}' nu a fost găsit. Contactați administratorul."}), 404
 
         if status_row['inscrieri_deschise'] is False:
             return jsonify({"status": "error", "message": "Înscrierile sunt ÎNCHISE pentru acest concurs."}), 403
 
-        # 6. Verificăm duplicate
+        # --- 6. FIXUL SOLICITAT: MESAJ CLAR PENTRU DUPLICATE ---
+        # Verificăm dacă sportivul e deja înscris (ignoring case)
         cur.execute("""
             SELECT id FROM inscrieri_concursuri 
-            WHERE concurs = %s AND nume = %s
+            WHERE concurs = %s AND LOWER(nume) = LOWER(%s)
         """, (concurs_nume, nume_sportiv))
+
         if cur.fetchone():
-            return jsonify({"status": "error", "message": f"{nume_sportiv} este deja înscris la {concurs_nume}."}), 409
+            # AICI trimitem mesajul roșu pe care îl doreai
+            return jsonify({
+                "status": "error",
+                "message": f"Atenție: {nume_sportiv} este deja înscris la acest concurs!"
+            }), 409
+        # -------------------------------------------------------
 
         # 7. INSERAREA ÎN BAZA DE DATE
-        # Folosim 'username_real' pentru consistență
         cur.execute("""
             INSERT INTO inscrieri_concursuri
                 (email, username, concurs, nume, data_nasterii, 
                  categorie_varsta, grad_centura, greutate, inaltime, probe, gen)
             VALUES
                 (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (email, username_real, concurs_nume, nume_sportiv, data_nasterii,
+        """, (email, real_username, concurs_nume, nume_sportiv, data_nasterii,
               categorie_varsta, grad_centura, greutate, inaltime, probe, gen))
 
         con.commit()
@@ -93,9 +99,9 @@ def inscriere_concurs():
         # 8. Trimitere mail asincron
         def send_async_email():
             try:
-                trimite_confirmare_inscriere(email, username_real, concurs_nume)
+                trimite_confirmare_inscriere(email, real_username, concurs_nume)
             except Exception as e:
-                print(f"[MAIL BACKGROUND ERROR] {e}")
+                print(f"[MAIL ERROR] {e}")
 
         Thread(target=send_async_email).start()
 
@@ -104,9 +110,6 @@ def inscriere_concurs():
     except Exception as e:
         con.rollback()
         print(f"[INSCRIERE ERROR] {e}")
-        msg = str(e)
-        if "invalid input syntax" in msg:
-            msg = "Verificați datele introduse (Greutate/Înălțime/Data)."
-        return jsonify({"status": "error", "message": msg}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()
