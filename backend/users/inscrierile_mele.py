@@ -25,41 +25,48 @@ def get_my_registrations():
         rol = user['rol']
         username = user['username']
         email = user['email']
-        nume_complet = user['nume_complet']
+        nume_complet = user['nume_complet'] or ""
 
         results = []
 
-        # 2. Construim Query-ul în funcție de rol
+        # --- LOGICA NOUĂ (REPARATĂ) ---
+
+        # Lista de nume pe care le căutăm (pe lângă username/email)
+        nume_de_cautat = [nume_complet] if nume_complet else []
+
         if rol == 'Parinte':
-            # Găsim copiii părintelui
+            # Găsim și numele copiilor din dashboard, ca să fim siguri
             cur.execute("SELECT nume FROM copii WHERE id_parinte = %s", (user_id,))
             kids_rows = cur.fetchall()
+            for row in kids_rows:
+                if row['nume']:
+                    nume_de_cautat.append(row['nume'])
 
-            nume_copii = [row['nume'] for row in kids_rows if row['nume']]
+        # Construim clauza SQL dinamic
+        # Căutăm înscrieri unde:
+        # 1. Username-ul celui care a înscris e al meu
+        # 2. SAU Email-ul e al meu
+        # 3. SAU Numele sportivului e în lista mea de copii (sau numele meu)
 
-            if nume_copii:
-                placeholders = ','.join(['%s'] * len(nume_copii))
-                # Selectăm explicit created_at
-                sql = f"""
-                    SELECT id, concurs, nume, categorie_varsta, probe, created_at
-                    FROM inscrieri_concursuri 
-                    WHERE nume IN ({placeholders})
-                    ORDER BY created_at DESC
-                """
-                cur.execute(sql, tuple(nume_copii))
-                results = cur.fetchall()
+        sql_query = """
+            SELECT id, concurs, nume, categorie_varsta, probe, created_at
+            FROM inscrieri_concursuri 
+            WHERE LOWER(username) = LOWER(%s) 
+               OR LOWER(email) = LOWER(%s)
+        """
 
-        else:
-            # Logică pentru Sportiv (vede doar înscrierile lui)
-            cur.execute("""
-                SELECT id, concurs, nume, categorie_varsta, probe, created_at
-                FROM inscrieri_concursuri 
-                WHERE LOWER(username) = LOWER(%s) 
-                   OR LOWER(email) = LOWER(%s)
-                   OR LOWER(nume) = LOWER(%s)
-                ORDER BY created_at DESC
-            """, (username, email, nume_complet))
-            results = cur.fetchall()
+        params = [username, email]
+
+        if nume_de_cautat:
+            # Adăugăm OR nume IN (...)
+            placeholders = ','.join(['%s'] * len(nume_de_cautat))
+            sql_query += f" OR nume IN ({placeholders})"
+            params.extend(nume_de_cautat)
+
+        sql_query += " ORDER BY created_at DESC"
+
+        cur.execute(sql_query, tuple(params))
+        results = cur.fetchall()
 
         # 3. Formatăm datele pentru Frontend
         data = []
