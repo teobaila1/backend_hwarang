@@ -12,13 +12,11 @@ def get_my_registrations():
     user_id = request.user_id
     con = get_conn()
     try:
-        # Folosim RealDictCursor pentru a accesa coloanele prin nume
         cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # 1. Identificăm utilizatorul
+        # 1. Date User
         cur.execute("SELECT username, email, rol, nume_complet FROM utilizatori WHERE id = %s", (user_id,))
         user = cur.fetchone()
-
         if not user:
             return jsonify({"status": "error", "message": "Utilizator negăsit."}), 404
 
@@ -27,38 +25,30 @@ def get_my_registrations():
         email = user['email']
         nume_complet = user['nume_complet'] or ""
 
-        results = []
-
-        # --- LOGICA NOUĂ (REPARATĂ) ---
-
-        # Lista de nume pe care le căutăm (pe lângă username/email)
-        nume_de_cautat = [nume_complet] if nume_complet else []
+        # 2. Colectăm lista de nume posibile (Numele propriu + Nume Copii)
+        nume_de_cautat = []
+        if nume_complet:
+            nume_de_cautat.append(nume_complet)
 
         if rol == 'Parinte':
-            # Găsim și numele copiilor din dashboard, ca să fim siguri
             cur.execute("SELECT nume FROM copii WHERE id_parinte = %s", (user_id,))
             kids_rows = cur.fetchall()
             for row in kids_rows:
                 if row['nume']:
                     nume_de_cautat.append(row['nume'])
 
-        # Construim clauza SQL dinamic
-        # Căutăm înscrieri unde:
-        # 1. Username-ul celui care a înscris e al meu
-        # 2. SAU Email-ul e al meu
-        # 3. SAU Numele sportivului e în lista mea de copii (sau numele meu)
+        # 3. QUERY UNIVERSAL (REPARAT)
+        # Căutăm înscrieri care sunt făcute pe Username/Email-ul contului
+        # SAU care sunt pe numele copiilor din listă
 
         sql_query = """
             SELECT id, concurs, nume, categorie_varsta, probe, created_at
             FROM inscrieri_concursuri 
-            WHERE LOWER(username) = LOWER(%s) 
-               OR LOWER(email) = LOWER(%s)
+            WHERE (LOWER(username) = LOWER(%s) OR LOWER(email) = LOWER(%s))
         """
-
         params = [username, email]
 
         if nume_de_cautat:
-            # Adăugăm OR nume IN (...)
             placeholders = ','.join(['%s'] * len(nume_de_cautat))
             sql_query += f" OR nume IN ({placeholders})"
             params.extend(nume_de_cautat)
@@ -68,10 +58,9 @@ def get_my_registrations():
         cur.execute(sql_query, tuple(params))
         results = cur.fetchall()
 
-        # 3. Formatăm datele pentru Frontend
+        # 4. Formatare
         data = []
         for r in results:
-            # Formatare dată: YYYY-MM-DD (ex: 2024-05-20)
             data_add = "N/A"
             if r.get('created_at'):
                 data_add = r['created_at'].strftime('%Y-%m-%d')
@@ -88,7 +77,7 @@ def get_my_registrations():
         return jsonify({"status": "success", "data": data}), 200
 
     except Exception as e:
-        print(f"!!!!!!!! EROARE SERVER INSCRIERI: {e}")
+        print(f"[ERR INSCRIERI] {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if con: con.close()

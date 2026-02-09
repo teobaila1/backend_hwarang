@@ -24,9 +24,6 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hwarang.ro").rstrip("/")
 
 # --- FUNCȚIE HELPER PENTRU TRIMITERE ASINCRONĂ ---
 def _send_reset_email_async(destinatar, username, link):
-    """
-    Trimite emailul în fundal ca să nu blocheze interfața.
-    """
     try:
         if not resend.api_key:
             print("[RESET ERROR] Lipseste RESEND_API_KEY")
@@ -57,13 +54,10 @@ def _send_reset_email_async(destinatar, username, link):
             "subject": "Resetare parolă - ACS Hwarang",
             "html": html_content
         })
-        print(f"[RESET SENT] Email trimis catre {destinatar}")
-
     except Exception as e:
         print(f"[RESET ERROR] Resend a esuat: {e}")
 
 
-# 📨 1. CERERE RESETARE (Generare Token + Email)
 @resetare_bp.post("/api/reset-password")
 def cerere_resetare():
     data = request.get_json(silent=True) or {}
@@ -78,30 +72,20 @@ def cerere_resetare():
         cur.execute("SELECT id, username FROM utilizatori WHERE LOWER(email) = %s", (email,))
         user = cur.fetchone()
 
-        # Dacă userul există, trimitem mailul
         if user:
             username = user['username']
-
-            # Generăm token valabil 1 oră
             token = serializer.dumps(email, salt="resetare-parola")
             link = f"{FRONTEND_URL}/resetare-parola/{token}"
-
-            # --- LANSARE FIR DE EXECUȚIE SEPARAT (THREAD) ---
-            # Asta rezolvă timeout-ul și eroarea de import
             Thread(target=_send_reset_email_async, args=(email, username, link)).start()
 
     except Exception as e:
         print(f"[RESET DB ERROR] {e}")
-        # Nu returnăm eroare utilizatorului pentru a nu divulga probleme de server
-
     finally:
         if con: con.close()
 
-    # Răspundem SUCCESS indiferent dacă emailul există sau nu (Securitate)
     return jsonify({"status": "success", "message": "Dacă emailul există, vei primi instrucțiuni."}), 200
 
 
-# 🛠️ 2. CONFIRMARE RESETARE (Schimbă parola efectiv)
 @resetare_bp.post("/api/reset-password/<token>")
 def reseteaza_parola(token):
     data = request.get_json(silent=True) or {}
@@ -110,11 +94,10 @@ def reseteaza_parola(token):
     if not parola_noua:
         return jsonify({"status": "error", "message": "Parola lipsește"}), 400
 
-    # Validare Token
     try:
-        email = serializer.loads(token, salt="resetare-parola", max_age=3600)  # 1h valabilitate
+        email = serializer.loads(token, salt="resetare-parola", max_age=3600)
     except SignatureExpired:
-        return jsonify({"status": "error", "message": "Link-ul a expirat. Cere unul nou."}), 400
+        return jsonify({"status": "error", "message": "Link-ul a expirat."}), 400
     except BadSignature:
         return jsonify({"status": "error", "message": "Link invalid."}), 400
     except Exception:
@@ -123,24 +106,31 @@ def reseteaza_parola(token):
     con = get_conn()
     try:
         cur = con.cursor()
-
-        # Verificăm utilizatorul
         cur.execute("SELECT id FROM utilizatori WHERE LOWER(email) = %s", (email,))
         row = cur.fetchone()
 
         if not row:
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
 
-        # Hash parola nouă
         hashed = hash_password(parola_noua)
 
-        cur.execute(
-            "UPDATE utilizatori SET parola = %s WHERE LOWER(email) = %s",
-            (hashed, email)
-        )
-        con.commit()
+        # --- FIXUL ESTE AICI ---
+        # Actualizăm 'parola' ȘI setăm 'password_hash' pe NULL ca să nu mai interfereze
+        try:
+            # Încercăm să setăm password_hash pe NULL (dacă există coloana)
+            cur.execute("""
+                UPDATE utilizatori 
+                SET parola = %s, password_hash = NULL 
+                WHERE LOWER(email) = %s
+            """, (hashed, email))
+        except Exception:
+            # Dacă dă eroare (poate coloana password_hash nu există pe local), facem fallback
+            con.rollback()
+            cur = con.cursor()
+            cur.execute("UPDATE utilizatori SET parola = %s WHERE LOWER(email) = %s", (hashed, email))
 
-        return jsonify({"status": "success", "message": "Parola a fost schimbată cu succes. Te poți loga."}), 200
+        con.commit()
+        return jsonify({"status": "success", "message": "Parola a fost schimbată!"}), 200
 
     except Exception as e:
         con.rollback()
