@@ -111,10 +111,14 @@ def antrenor_dashboard_data():
                 p_display = k['pfull'] or k['puser'] or "⚠ Părinte Lipsă/Șters"
                 p_email = k['pemail'] or ""
 
+                # --- MODIFICARE AICI: Formatăm data nașterii ca String ---
+                dn_str = str(k['data_nasterii']) if k['data_nasterii'] else ""
+
                 lista_copii.append({
                     "id": k['id'],
                     "nume": k['nume'],
                     "varsta": _calculate_age(k['data_nasterii']),
+                    "data_nasterii": dn_str,  # <--- CRITIC: Trimitem data brută pt editare
                     "gen": k['gen'] or "—",
                     "grupa": g_nume,
                     "tip": "copil",
@@ -127,10 +131,14 @@ def antrenor_dashboard_data():
 
             for a in adults_rows:
                 display_name = a['nume_complet'] or a['username']
+                # --- MODIFICARE AICI: Formatăm data nașterii ca String ---
+                dn_str = str(a['data_nasterii']) if a['data_nasterii'] else ""
+
                 lista_copii.append({
                     "id": str(a['id']),
                     "nume": display_name,
                     "varsta": _calculate_age(a['data_nasterii']),
+                    "data_nasterii": dn_str,  # <--- CRITIC: Trimitem data brută pt editare
                     "gen": a['gen'] or "—",
                     "grupa": g_nume,
                     "tip": "sportiv",
