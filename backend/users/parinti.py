@@ -53,7 +53,7 @@ def _new_claim_code():
     return uuid.uuid4().hex[:8].upper()
 
 
-# --- 1. CREARE PLACEHOLDER (Păstrat din codul tău) ---
+# --- 1. CREARE PLACEHOLDER (Pentru Antrenori) ---
 @parinti_bp.post("/api/parinti/placeholder")
 @token_required
 def create_parent_placeholder():
@@ -86,7 +86,7 @@ def create_parent_placeholder():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- 2. REVENDICARE CONT (Păstrat din codul tău) ---
+# --- 2. REVENDICARE CONT (Claim) ---
 @parinti_bp.patch("/api/parinti/claim")
 def claim_parent_account():
     data = request.get_json(silent=True) or {}
@@ -136,12 +136,15 @@ def claim_parent_account():
                 c_nume = _normalize_name(copil.get("nume"))
                 c_grupa = _normalize_name(copil.get("grupa"))
                 c_gen = copil.get("gen")
+                # Fix pentru dată la claim (dacă există)
+                c_data = copil.get("data_nasterii")
+
                 if c_nume:
                     c_id = uuid.uuid4().hex
                     cur.execute("""
-                        INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, added_by_trainer)
-                        VALUES (%s, %s, %s, %s, %s, FALSE)
-                    """, (c_id, parent_id, c_nume, c_gen, c_grupa))
+                        INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
+                        VALUES (%s, %s, %s, %s, %s, %s, FALSE)
+                    """, (c_id, parent_id, c_nume, c_gen, c_grupa, c_data))
                     if c_grupa:
                         gid = _get_or_create_group_id(cur, c_grupa)
                         if gid:
@@ -164,7 +167,7 @@ def get_my_children():
     try:
         cur = con.cursor()
         # Am adăugat data_nasterii în SELECT
-        sql = "SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s"
+        sql = "SELECT id, nume, gen, grupa_text, data_nasterii FROM copii WHERE id_parinte = %s ORDER BY nume ASC"
         cur.execute(sql, (user_id,))
         rows = cur.fetchall()
 
@@ -203,11 +206,22 @@ def add_my_child():
 
     raw_grupa = data.get("grupa")
     grupa = _normalize_group_name(raw_grupa)
-
     gen = data.get("gen")
 
-    # 2. Citim Data Nașterii direct (YYYY-MM-DD)
+    # 2. VALIDARE DATĂ STRICTĂ
     data_nasterii_input = data.get("data_nasterii")
+
+    # Dacă data e goală sau invalidă, punem NULL, nu lăsăm string gol
+    if not data_nasterii_input or len(str(data_nasterii_input).strip()) < 10:
+        data_nasterii_input = None
+    else:
+        # Încercăm să vedem dacă e format corect YYYY-MM-DD
+        try:
+            # Asta va arunca eroare dacă data e "2023" sau "test"
+            datetime.date.fromisoformat(str(data_nasterii_input))
+        except ValueError:
+            return jsonify(
+                {"status": "error", "message": "Formatul datei de naștere este invalid. Folosiți calendarul."}), 400
 
     con = get_conn()
     try:
@@ -221,7 +235,7 @@ def add_my_child():
 
         new_id = uuid.uuid4().hex
 
-        # 3. Inserăm direct cu data_nasterii
+        # 3. Inserăm
         cur.execute("""
             INSERT INTO copii (id, id_parinte, nume, gen, grupa_text, data_nasterii, added_by_trainer)
             VALUES (%s, %s, %s, %s, %s, %s, FALSE)

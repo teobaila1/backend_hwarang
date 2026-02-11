@@ -94,7 +94,7 @@ def inscriere_concurs():
             if inscris_de.lower() != username_real.lower():
                 return jsonify({
                     "status": "error",
-                    "message": f"Acest copil este deja înscris de '{inscris_de}' (Antrenor). Nu trebuie să mai faci nimic."
+                    "message": f"Acest copil este deja înscris de '{inscris_de}'. Nu trebuie să mai faci nimic."
                 }), 409
             else:
                 return jsonify({
