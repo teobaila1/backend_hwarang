@@ -12,13 +12,13 @@ inscriere_concurs_bp = Blueprint('inscriere_concurs', __name__)
 def inscriere_concurs():
     data = request.get_json(silent=True) or {}
 
-    # 1. Date de identificare (Parent)
+    # 1. Date primite
+    # Notă: Putem lua username-ul și din token, dar păstrăm logica ta momentan
     username_input = (data.get('username') or '').strip()
-    concurs_nume = (data.get('concurs') or '').strip()
-
-    # 2. Date Sportiv
+    concurs_nume_input = (data.get('concurs') or '').strip()
     nume_sportiv = (data.get("nume") or "").strip()
 
+    # Helper pentru curățare
     def clean_input(val):
         if not val: return None
         s = str(val).strip()
@@ -37,79 +37,111 @@ def inscriere_concurs():
     else:
         probe = str(probe_raw or "").strip()
 
-    # 3. Validări primare
-    if not username_input or not concurs_nume:
-        return jsonify({"status": "error", "message": "Date lipsă: username și concurs sunt obligatorii."}), 400
+    # Validări de bază
+    if not username_input or not concurs_nume_input:
+        return jsonify(
+            {"status": "error", "message": "Eroare tehnică: Lipsesc datele contului. Încearcă să te reloghezi."}), 400
     if not nume_sportiv:
-        return jsonify({"status": "error", "message": "Numele sportivului este obligatoriu."}), 400
+        return jsonify({"status": "error", "message": "Te rugăm să completezi numele sportivului."}), 400
 
     con = get_conn()
     try:
         cur = con.cursor()
 
-        # 4. Obținem Email-ul și USERNAME-UL REAL (din DB)
-        # (Rezolvă problema cu litere mari/mici de la telefon)
+        # ---------------------------------------------------------
+        # PAS 1: Găsim Userul (Case Insensitive)
+        # ---------------------------------------------------------
         cur.execute("SELECT email, username FROM utilizatori WHERE LOWER(username) = LOWER(%s)", (username_input,))
-        row = cur.fetchone()
+        user_row = cur.fetchone()
 
-        if not row:
-            return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
+        if not user_row:
+            # Fallback: încercăm după email dacă username-ul nu merge (poate frontend-ul a trimis email)
+            cur.execute("SELECT email, username FROM utilizatori WHERE LOWER(email) = LOWER(%s)", (username_input,))
+            user_row = cur.fetchone()
 
-        email = row["email"]
-        real_username = row["username"]
-
-        # 5. Verificăm existența concursului (Fix critic pentru concursuri fantomă)
-        cur.execute("SELECT inscrieri_deschise FROM concursuri WHERE nume = %s", (concurs_nume,))
-        status_row = cur.fetchone()
-
-        if not status_row:
+        if not user_row:
             return jsonify({"status": "error",
-                            "message": f"Eroare: Concursul '{concurs_nume}' nu a fost găsit. Contactați administratorul."}), 404
+                            "message": "Contul tău nu a fost identificat corect. Te rugăm să te deloghezi și să intri iar."}), 404
 
-        if status_row['inscrieri_deschise'] is False:
-            return jsonify({"status": "error", "message": "Înscrierile sunt ÎNCHISE pentru acest concurs."}), 403
+        email_real = user_row["email"]
+        username_real = user_row["username"]
 
-        # --- 6. FIXUL SOLICITAT: MESAJ CLAR PENTRU DUPLICATE ---
-        # Verificăm dacă sportivul e deja înscris (ignoring case)
+        # ---------------------------------------------------------
+        # PAS 2: Găsim Concursul (CRITIC: Case Insensitive)
+        # ---------------------------------------------------------
+        # Căutăm concursul ignorând literele mari/mici pentru a evita erorile de tip "Fantomă"
         cur.execute("""
-            SELECT id FROM inscrieri_concursuri 
-            WHERE concurs = %s AND LOWER(nume) = LOWER(%s)
-        """, (concurs_nume, nume_sportiv))
+            SELECT nume, inscrieri_deschise 
+            FROM concursuri 
+            WHERE LOWER(nume) = LOWER(%s)
+        """, (concurs_nume_input,))
 
-        if cur.fetchone():
-            # AICI trimitem mesajul roșu pe care îl doreai
+        concurs_row = cur.fetchone()
+
+        if not concurs_row:
             return jsonify({
                 "status": "error",
-                "message": f"Atenție: {nume_sportiv} este deja înscris la acest concurs!"
-            }), 409
-        # -------------------------------------------------------
+                "message": f"Concursul '{concurs_nume_input}' nu a fost găsit în baza de date."
+            }), 404
 
-        # 7. INSERAREA ÎN BAZA DE DATE
+        concurs_nume_db = concurs_row['nume']  # Folosim numele corect din DB
+        is_open = concurs_row['inscrieri_deschise']
+
+        if is_open is False:
+            return jsonify(
+                {"status": "error", "message": "Ne pare rău, înscrierile sunt ÎNCHISE pentru acest concurs."}), 403
+
+        # ---------------------------------------------------------
+        # PAS 3: Verificare DUPLICAT (Explicație clară)
+        # ---------------------------------------------------------
+        cur.execute("""
+            SELECT id, username FROM inscrieri_concursuri 
+            WHERE LOWER(concurs) = LOWER(%s) AND LOWER(nume) = LOWER(%s)
+        """, (concurs_nume_db, nume_sportiv))
+
+        existing = cur.fetchone()
+
+        if existing:
+            # AICI E CHEIA: Îi spunem cine l-a înscris
+            inscris_de = existing['username']
+            if inscris_de.lower() == username_real.lower():
+                msg = f"{nume_sportiv} este deja înscris de tine."
+            else:
+                msg = f"{nume_sportiv} a fost deja înscris (probabil de antrenor sau celălalt părinte)."
+
+            return jsonify({
+                "status": "error",
+                "message": f"Atenție: {msg} Nu este nevoie să îl înscrii din nou."
+            }), 409
+
+        # ---------------------------------------------------------
+        # PAS 4: INSERARE
+        # ---------------------------------------------------------
         cur.execute("""
             INSERT INTO inscrieri_concursuri
                 (email, username, concurs, nume, data_nasterii, 
                  categorie_varsta, grad_centura, greutate, inaltime, probe, gen)
             VALUES
                 (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (email, real_username, concurs_nume, nume_sportiv, data_nasterii,
+        """, (email_real, username_real, concurs_nume_db, nume_sportiv, data_nasterii,
               categorie_varsta, grad_centura, greutate, inaltime, probe, gen))
 
         con.commit()
 
-        # 8. Trimitere mail asincron
+        # Trimite mail (fără să blocheze răspunsul)
         def send_async_email():
             try:
-                trimite_confirmare_inscriere(email, real_username, concurs_nume)
+                trimite_confirmare_inscriere(email_real, username_real, concurs_nume_db)
             except Exception as e:
                 print(f"[MAIL ERROR] {e}")
 
         Thread(target=send_async_email).start()
 
-        return jsonify({"status": "success", "message": f"Înscriere reușită pentru {concurs_nume}!"}), 201
+        return jsonify({"status": "success", "message": f"Succes! {nume_sportiv} a fost înscris cu succes."}), 201
 
     except Exception as e:
-        con.rollback()
+        if con: con.rollback()
         print(f"[INSCRIERE ERROR] {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": "Eroare internă server: " + str(e)}), 500
     finally:
         if con: con.close()
