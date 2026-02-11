@@ -88,6 +88,7 @@ def cerere_resetare():
 
 @resetare_bp.post("/api/reset-password/<token>")
 def reseteaza_parola(token):
+    # 1. Validări de bază
     data = request.get_json(silent=True) or {}
     parola_noua = data.get("password")
 
@@ -96,44 +97,36 @@ def reseteaza_parola(token):
 
     try:
         email = serializer.loads(token, salt="resetare-parola", max_age=3600)
-    except SignatureExpired:
-        return jsonify({"status": "error", "message": "Link-ul a expirat."}), 400
-    except BadSignature:
-        return jsonify({"status": "error", "message": "Link invalid."}), 400
     except Exception:
-        return jsonify({"status": "error", "message": "Eroare validare link."}), 400
+        return jsonify({"status": "error", "message": "Link invalid sau expirat."}), 400
 
     con = get_conn()
     try:
         cur = con.cursor()
+
+        # 2. Verificăm dacă userul există
         cur.execute("SELECT id FROM utilizatori WHERE LOWER(email) = %s", (email,))
         row = cur.fetchone()
 
         if not row:
             return jsonify({"status": "error", "message": "Utilizator inexistent."}), 404
 
+        # 3. Generăm hash-ul
         hashed = hash_password(parola_noua)
 
-        # --- FIXUL ESTE AICI ---
-        # Actualizăm 'parola' ȘI setăm 'password_hash' pe NULL ca să nu mai interfereze
-        try:
-            # Încercăm să setăm password_hash pe NULL (dacă există coloana)
-            cur.execute("""
-                UPDATE utilizatori 
-                SET parola = %s, password_hash = NULL 
-                WHERE LOWER(email) = %s
-            """, (hashed, email))
-        except Exception:
-            # Dacă dă eroare (poate coloana password_hash nu există pe local), facem fallback
-            con.rollback()
-            cur = con.cursor()
-            cur.execute("UPDATE utilizatori SET parola = %s WHERE LOWER(email) = %s", (hashed, email))
+        # 4. UPDATE SIMPLU (Doar coloana care există!)
+        cur.execute("""
+            UPDATE utilizatori 
+            SET parola = %s 
+            WHERE LOWER(email) = %s
+        """, (hashed, email))
 
         con.commit()
         return jsonify({"status": "success", "message": "Parola a fost schimbată!"}), 200
 
     except Exception as e:
-        con.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        if con: con.rollback()
+        print(f"[RESET ERROR] {e}")
+        return jsonify({"status": "error", "message": "Eroare server."}), 500
     finally:
         if con: con.close()
