@@ -27,7 +27,9 @@ def token_required(f):
 
         try:
             # 2. Decodăm Token-ul
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            # Adăugăm "leeway": 60 secunde -> Asta permite o diferență de 1 minut între ceasuri
+            # și rezolvă eroarea "Session expired" care apare instantaneu.
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"leeway": 60})
 
             # --- FIXUL ESTE AICI ---
             # Atașăm datele utilizatorului direct de obiectul `request`

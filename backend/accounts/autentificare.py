@@ -62,7 +62,7 @@ def login():
                     'user_id': user_row['id'],
                     'username': user_row['username'],
                     'rol': user_row['rol'],
-                    'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+                    'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
                 }, SECRET_KEY, algorithm="HS256")
 
                 print(f"[LOGIN SUCCESS] User: {user_row['username']} | Name: {full_name}")
