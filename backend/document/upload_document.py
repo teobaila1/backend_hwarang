@@ -171,7 +171,15 @@ def get_documents():
 def download_file_by_id(doc_id):
     filename = _get_filename_by_id(doc_id)
     if not filename:
-        return jsonify({"status": "error", "message": "Document inexistent"}), 404
+        return jsonify({"status": "error", "message": "Documentul nu există în baza de date."}), 404
+
+    # Verificăm dacă fișierul fizic a supraviețuit deploy-ului Render
+    file_path = UPLOAD_DIR / filename
+    if not file_path.exists():
+        return jsonify({
+            "status": "error", 
+            "message": "Fișierul fizic nu mai există pe server (șters de Render la deploy)."
+        }), 404
 
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
 
@@ -180,24 +188,26 @@ def download_file_by_id(doc_id):
 @token_required
 @admin_required  # <--- Doar ADMIN șterge
 def delete_document_by_id(doc_id):
-    filename = _get_filename_by_id(doc_id)
-    if not filename:
-        return jsonify({"status": "error", "message": "Document inexistent"}), 404
-
-    con = get_conn()
     try:
-        # 1. Ștergem fizic
+        filename = _get_filename_by_id(doc_id)
+        if not filename:
+            return jsonify({"status": "error", "message": "Document inexistent în DB"}), 404
+
+        # 1. Ștergem fizic DOAR dacă mai există
         file_path = UPLOAD_DIR / filename
         if file_path.exists():
             os.remove(file_path)
 
-        # 2. Ștergem din DB
+        # 2. Ștergem din DB (chiar dacă fișierul fizic dispăruse, vrem să curățăm lista)
+        con = get_conn()
         with con:
             with con.cursor() as cur:
                 cur.execute("DELETE FROM documente WHERE id = %s", (doc_id,))
-        con.commit()
-
-        return jsonify({"status": "success", "message": "Șters cu succes"}), 200
+        
+        return jsonify({"status": "success", "message": "Document șters cu succes!"}), 200
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"EROARE FATALĂ LA ȘTERGEREA DOC ID {doc_id}:")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": "Eroare internă de server."}), 500
