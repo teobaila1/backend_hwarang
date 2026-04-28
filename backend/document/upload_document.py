@@ -109,6 +109,8 @@ def upload_documents():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+import traceback # Adaugă asta sus de tot în fișier (dacă nu ai deja)
+
 @upload_document_bp.get("/api/get_documents")
 @token_required  # <--- Doar cei logați văd lista
 def get_documents():
@@ -116,9 +118,15 @@ def get_documents():
     try:
         with con:
             with con.cursor() as cur:
-                # Verificăm dacă tabela există
-                cur.execute("SELECT to_regclass('public.documente')")
-                if not cur.fetchone()[0]:
+                # Mod corect și universal de a verifica dacă tabela există
+                cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'documente')")
+                row = cur.fetchone()
+                
+                table_exists = False
+                if row:
+                    table_exists = row['exists'] if isinstance(row, dict) else row[0]
+                    
+                if not table_exists:
                     return jsonify([])
 
                 cur.execute("""
@@ -152,7 +160,10 @@ def get_documents():
         return jsonify(docs)
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # Asta te va salva pe viitor! Printează exact linia unde crapă în logurile din Render.
+        print("EROARE FATALĂ IN get_documents:")
+        traceback.print_exc() 
+        return jsonify({"status": "error", "message": "Eroare internă de server."}), 500
 
 
 @upload_document_bp.get("/api/uploads/id/<int:doc_id>")
