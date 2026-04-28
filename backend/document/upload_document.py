@@ -118,7 +118,7 @@ def get_documents():
     try:
         with con:
             with con.cursor() as cur:
-                # Mod corect și universal de a verifica dacă tabela există
+                # Verificăm dacă tabela există
                 cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'documente')")
                 row = cur.fetchone()
                 
@@ -129,9 +129,9 @@ def get_documents():
                 if not table_exists:
                     return jsonify([])
 
+                # FIX-UL AICI: Selectăm upload_date simplu, fără TO_CHAR
                 cur.execute("""
-                    SELECT id, filename, uploaded_by, 
-                           TO_CHAR(upload_date, 'YYYY-MM-DD HH24:MI:SS') as upload_date 
+                    SELECT id, filename, uploaded_by, upload_date 
                     FROM documente 
                     ORDER BY id DESC
                 """)
@@ -139,13 +139,13 @@ def get_documents():
 
         docs = []
         for r in rows:
-            # Gestionare tuplu vs dict
+            # Gestionare tuplu vs dict + transformare sigură în string a datei
             if isinstance(r, dict):
                 docs.append({
                     "id": r["id"],
                     "filename": r["filename"],
                     "uploaded_by": r["uploaded_by"],
-                    "upload_date": r["upload_date"],
+                    "upload_date": str(r["upload_date"]) if r["upload_date"] else "-",
                     "download_url": f"/api/uploads/id/{r['id']}",
                 })
             else:
@@ -153,15 +153,15 @@ def get_documents():
                     "id": r[0],
                     "filename": r[1],
                     "uploaded_by": r[2],
-                    "upload_date": r[3],
+                    "upload_date": str(r[3]) if r[3] else "-",
                     "download_url": f"/api/uploads/id/{r[0]}",
                 })
 
         return jsonify(docs)
 
     except Exception as e:
-        # Asta te va salva pe viitor! Printează exact linia unde crapă în logurile din Render.
         print("EROARE FATALĂ IN get_documents:")
+        import traceback
         traceback.print_exc() 
         return jsonify({"status": "error", "message": "Eroare internă de server."}), 500
 
