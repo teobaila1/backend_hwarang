@@ -63,7 +63,7 @@ def upload_documents():
     if not files or files[0].filename == "":
         return jsonify({"status": "error", "message": "Niciun fișier selectat."}), 400
 
-    # Preluăm username-ul din TOKEN (mai sigur) sau din form ca fallback
+    # Preluăm username-ul
     username = "Anonim"
     if hasattr(request, 'user_data'):
         username = request.user_data.get('username', 'Anonim')
@@ -92,8 +92,8 @@ def upload_documents():
                         safe_name = _unique_filename(UPLOAD_DIR, f.filename)
                         save_path = UPLOAD_DIR / safe_name
 
-                        # 2. Salvăm fizic
-                        f.save(save_path)
+                        # 2. Salvăm fizic (am pus str() pt siguranță maximă)
+                        f.save(str(save_path))
 
                         # 3. Salvăm în baza de date
                         cur.execute(
@@ -105,8 +105,11 @@ def upload_documents():
         return jsonify({"status": "success", "message": f"{saved_count} fișiere încărcate."}), 201
 
     except Exception as e:
-        print(f"Eroare upload: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # AICI E MAGIA: Scriem eroarea exactă în logurile de la Render!
+        print("EROARE FATALĂ LA UPLOAD:")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": "Eroare internă de server."}), 500
 
 
 import traceback # Adaugă asta sus de tot în fișier (dacă nu ai deja)
