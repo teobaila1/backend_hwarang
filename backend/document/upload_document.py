@@ -74,6 +74,7 @@ def upload_documents():
     con = get_conn()
 
     try:
+        # Blocul 'with' deschide conexiunea și face 'commit' automat la final!
         with con:
             with con.cursor() as cur:
                 # Asigurăm tabela
@@ -101,11 +102,12 @@ def upload_documents():
                             (safe_name, username)
                         )
                         saved_count += 1
-        con.commit()
+                        
+        # AM ȘTERS con.commit() DE AICI! 
+        
         return jsonify({"status": "success", "message": f"{saved_count} fișiere încărcate."}), 201
 
     except Exception as e:
-        # AICI E MAGIA: Scriem eroarea exactă în logurile de la Render!
         print("EROARE FATALĂ LA UPLOAD:")
         import traceback
         traceback.print_exc()
