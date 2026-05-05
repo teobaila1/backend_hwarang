@@ -96,7 +96,8 @@ def add_event():
                         VALUES (%s, %s, %s, %s, %s) RETURNING id
                     """, (titlu, perioada, locatie, False, True)) 
                     
-                    concurs_nou_id = cur.fetchone()[0]
+                    rezultat = cur.fetchone()
+                    concurs_nou_id = rezultat['id']
 
                 # 2. Creăm evenimentul în calendar
                 cur.execute("""
