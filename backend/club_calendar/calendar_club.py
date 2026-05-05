@@ -73,8 +73,11 @@ def add_event():
     descriere = data.get("descriere")
     tip = data.get("tip")
 
-    if not titlu or not start:
-        return jsonify({"status": "error", "message": "Date obligatorii lipsă"}), 400
+    # Tratăm corect datele calendaristice
+    if not start or start.strip() == "":
+        return jsonify({"status": "error", "message": "Data de start e obligatorie"}), 400
+    if end == "":
+        end = None
 
     con = get_conn()
     try:
@@ -82,7 +85,7 @@ def add_event():
             with con.cursor() as cur:
                 concurs_nou_id = None
                 
-                # 1. VERIFICĂM: Este competiție? DOAR ATUNCI îl băgăm în tabela `concursuri`
+                # 1. AICI ESTE ZONA UNDE CRAPĂ DOAR LA COMPETIȚII
                 if tip == "Competitie":
                     perioada = f"{start[:10]}"
                     if end:
@@ -95,8 +98,7 @@ def add_event():
                     
                     concurs_nou_id = cur.fetchone()[0]
 
-                # 2. Creăm evenimentul în calendar. 
-                # Dacă NU a fost competiție, id_concurs_asociat va fi automat NULL (gol).
+                # 2. Creăm evenimentul în calendar
                 cur.execute("""
                     INSERT INTO calendar_club (titlu, data_start, data_sfarsit, locatie, descriere, tip_eveniment, id_concurs_asociat)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -106,7 +108,12 @@ def add_event():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": "Eroare internă de server"}), 500
+        # MAGIC TRICK: Trimitem eroarea Bazei de Date direct în React!
+        return jsonify({"status": "error", "message": f"Eroare Bază de Date: {str(e)}"}), 500
+    finally:
+        # Închidem conexiunea corect
+        if con:
+            con.close()
 
 
 @calendar_club_bp.delete("/api/calendar/evenimente/<int:event_id>")
