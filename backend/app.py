@@ -29,6 +29,7 @@ from backend.passwords.resetare_parola import resetare_bp
 from backend.users.parinti import parinti_bp
 from backend.users.elevi import elevi_bp
 from backend.admin_diagnostic import admin_diagnostic_bp
+from backend.inscriere_evenimente import inscriere_evenimente_bp
 
 # from backend.migrare_copii import migrare_bp
 # from backend.users.reparare_copii import reparare_copii_bp
@@ -77,6 +78,7 @@ app.register_blueprint(calendar_club_bp)
 app.register_blueprint(inscrierile_mele_bp)
 app.register_blueprint(admin_diagnostic_bp)
 app.register_blueprint(notificari_plata_bp)
+app.register_blueprint(inscriere_evenimente_bp)
 
 
 
