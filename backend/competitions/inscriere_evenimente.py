@@ -1,4 +1,6 @@
 from flask import Blueprint, request, jsonify
+from backend.config import get_conn
+from backend.accounts.decorators import token_required
 # Asigură-te că ai importat decoratorul tău pentru token (ex: @token_required)
 
 
