@@ -69,3 +69,54 @@ def inscrie_la_eveniment(eveniment_id):  # <-- AM SCOS 'current_user' DE AICI
             cursor.close()
         if conn:
             conn.close()
+
+
+
+
+
+@inscriere_evenimente_bp.route('/api/calendar/evenimente/<int:eveniment_id>/inscrieri', methods=['GET'])
+@token_required
+def get_inscrieri_eveniment(eveniment_id):
+    conn = None
+    cursor = None
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+
+        # Această interogare combină datele din profiluri cu cele introduse manual.
+        # ATENȚIE: Am presupus că tabelul tău cu copii se numește 'sportivi'. 
+        # Dacă se numește altfel (ex: 'copii'), modifică cuvântul 'sportivi' de mai jos.
+        query = """
+            SELECT 
+                COALESCE(s.nume, ie.nume_manual) AS nume,
+                COALESCE(s.prenume, ie.prenume_manual) AS prenume,
+                COALESCE(s.grad, ie.grad_manual) AS grad,
+                CASE WHEN ie.sportiv_id IS NOT NULL THEN 'Profil' ELSE 'Manual' END as tip_inscriere
+            FROM inscrieri_evenimente ie
+            LEFT JOIN sportivi s ON ie.sportiv_id = s.id
+            WHERE ie.eveniment_id = %s
+            ORDER BY nume ASC
+        """
+        cursor.execute(query, (eveniment_id,))
+        randuri = cursor.fetchall()
+
+        # Formatăm rezultatul pentru React
+        inscrieri = []
+        for rand in randuri:
+            inscrieri.append({
+                "nume": rand[0],
+                "prenume": rand[1],
+                "grad": rand[2],
+                "tip_inscriere": rand[3]
+            })
+
+        return jsonify(inscrieri), 200
+
+    except Exception as e:
+        print(f"Eroare la citire inscrieri: {e}")
+        return jsonify({"error": "A apărut o eroare la preluarea datelor."}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
