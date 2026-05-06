@@ -87,11 +87,11 @@ def get_inscrieri_eveniment(eveniment_id):
         query = """
             SELECT 
                 COALESCE(s.nume, ie.nume_manual) AS nume,
-                COALESCE(s.prenume, ie.prenume_manual) AS prenume,
-                COALESCE(s.grad, ie.grad_manual) AS grad,
+                COALESCE('', ie.prenume_manual) AS prenume,
+                ie.grad_manual AS grad,
                 CASE WHEN ie.sportiv_id IS NOT NULL THEN 'Profil' ELSE 'Manual' END as tip_inscriere
             FROM inscrieri_evenimente ie
-            LEFT JOIN copii s ON ie.sportiv_id = s.id
+            LEFT JOIN copii s ON REPLACE(ie.sportiv_id::text, '-', '') = s.id
             WHERE ie.eveniment_id = %s
             ORDER BY nume ASC
         """
