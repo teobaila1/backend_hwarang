@@ -83,12 +83,11 @@ def get_inscrieri_eveniment(eveniment_id):
         conn = get_conn()
         cursor = conn.cursor()
 
-        # Fără ::text, lăsăm baza de date să le lege natural, pentru că ambele sunt acum UUID
+        # Am scos de tot grad_manual
         query = """
             SELECT 
                 COALESCE(s.nume, ie.nume_manual) AS nume,
                 COALESCE('', ie.prenume_manual) AS prenume,
-                ie.grad_manual AS grad,
                 CASE WHEN ie.sportiv_id IS NOT NULL THEN 'Profil' ELSE 'Manual' END as tip_inscriere
             FROM inscrieri_evenimente ie
             LEFT JOIN copii s ON REPLACE(ie.sportiv_id::text, '-', '') = s.id
@@ -103,15 +102,13 @@ def get_inscrieri_eveniment(eveniment_id):
             inscrieri.append({
                 "nume": rand[0],
                 "prenume": rand[1],
-                "grad": rand[2],
-                "tip_inscriere": rand[3]
+                "tip_inscriere": rand[2]
             })
 
         return jsonify(inscrieri), 200
 
     except Exception as e:
         print(f"Eroare la citire inscrieri: {e}")
-        # Lăsăm totuși asta aici temporar, ca să vedem exact eroarea în caz că mai apare ceva
         return jsonify({"error": str(e)}), 500
     finally:
         if cursor:
