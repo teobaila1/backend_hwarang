@@ -83,7 +83,6 @@ def get_inscrieri_eveniment(eveniment_id):
         conn = get_conn()
         cursor = conn.cursor()
 
-        # Am pus grad_manual la loc și am reparat logica pentru prenume
         query = """
             SELECT 
                 COALESCE(s.nume, ie.nume_manual) AS nume,
@@ -100,17 +99,26 @@ def get_inscrieri_eveniment(eveniment_id):
 
         inscrieri = []
         for rand in randuri:
-            inscrieri.append({
-                "nume": rand[0],
-                "prenume": rand[1],
-                "grad": rand[2],           # Index 2 este acum gradul
-                "tip_inscriere": rand[3]   # Index 3 este tipul înscrierii
-            })
+            # Baza ta de date returnează un Dicționar (RealDictCursor)
+            if isinstance(rand, dict):
+                inscrieri.append({
+                    "nume": rand.get("nume"),
+                    "prenume": rand.get("prenume"),
+                    "grad": rand.get("grad"),
+                    "tip_inscriere": rand.get("tip_inscriere")
+                })
+            # Soluție de rezervă în caz că returnează un Tuplu/Listă
+            else:
+                inscrieri.append({
+                    "nume": rand[0],
+                    "prenume": rand[1],
+                    "grad": rand[2],
+                    "tip_inscriere": rand[3]
+                })
 
         return jsonify(inscrieri), 200
 
     except Exception as e:
-        # Folosim repr(e) ca să ne arate exact tipul erorii în terminal, nu doar "0"
         print(f"Eroare la citire inscrieri: {repr(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
