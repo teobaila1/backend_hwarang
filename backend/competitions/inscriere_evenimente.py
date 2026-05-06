@@ -93,7 +93,7 @@ def get_inscrieri_eveniment(eveniment_id):
                 COALESCE(s.grad, ie.grad_manual) AS grad,
                 CASE WHEN ie.sportiv_id IS NOT NULL THEN 'Profil' ELSE 'Manual' END as tip_inscriere
             FROM inscrieri_evenimente ie
-            LEFT JOIN sportivi s ON ie.sportiv_id = s.id
+            LEFT JOIN copii s ON ie.sportiv_id = s.id  <-- AICI AM PUS 'copii'
             WHERE ie.eveniment_id = %s
             ORDER BY nume ASC
         """
