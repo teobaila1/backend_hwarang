@@ -83,9 +83,7 @@ def get_inscrieri_eveniment(eveniment_id):
         conn = get_conn()
         cursor = conn.cursor()
 
-        # Această interogare combină datele din profiluri cu cele introduse manual.
-        # ATENȚIE: Am presupus că tabelul tău cu copii se numește 'sportivi'. 
-        # Dacă se numește altfel (ex: 'copii'), modifică cuvântul 'sportivi' de mai jos.
+        # Fără ::text, lăsăm baza de date să le lege natural, pentru că ambele sunt acum UUID
         query = """
             SELECT 
                 COALESCE(s.nume, ie.nume_manual) AS nume,
@@ -100,7 +98,6 @@ def get_inscrieri_eveniment(eveniment_id):
         cursor.execute(query, (eveniment_id,))
         randuri = cursor.fetchall()
 
-        # Formatăm rezultatul pentru React
         inscrieri = []
         for rand in randuri:
             inscrieri.append({
@@ -114,7 +111,8 @@ def get_inscrieri_eveniment(eveniment_id):
 
     except Exception as e:
         print(f"Eroare la citire inscrieri: {e}")
-        return jsonify({"error": "A apărut o eroare la preluarea datelor."}), 500
+        # Lăsăm totuși asta aici temporar, ca să vedem exact eroarea în caz că mai apare ceva
+        return jsonify({"error": str(e)}), 500
     finally:
         if cursor:
             cursor.close()
