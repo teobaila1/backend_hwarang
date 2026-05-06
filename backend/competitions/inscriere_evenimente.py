@@ -83,11 +83,12 @@ def get_inscrieri_eveniment(eveniment_id):
         conn = get_conn()
         cursor = conn.cursor()
 
-        # Am scos de tot grad_manual
+        # Am pus grad_manual la loc și am reparat logica pentru prenume
         query = """
             SELECT 
                 COALESCE(s.nume, ie.nume_manual) AS nume,
-                COALESCE('', ie.prenume_manual) AS prenume,
+                COALESCE(ie.prenume_manual, '') AS prenume,
+                ie.grad_manual AS grad,
                 CASE WHEN ie.sportiv_id IS NOT NULL THEN 'Profil' ELSE 'Manual' END as tip_inscriere
             FROM inscrieri_evenimente ie
             LEFT JOIN copii s ON REPLACE(ie.sportiv_id::text, '-', '') = s.id
@@ -102,13 +103,15 @@ def get_inscrieri_eveniment(eveniment_id):
             inscrieri.append({
                 "nume": rand[0],
                 "prenume": rand[1],
-                "tip_inscriere": rand[2]
+                "grad": rand[2],           # Index 2 este acum gradul
+                "tip_inscriere": rand[3]   # Index 3 este tipul înscrierii
             })
 
         return jsonify(inscrieri), 200
 
     except Exception as e:
-        print(f"Eroare la citire inscrieri: {e}")
+        # Folosim repr(e) ca să ne arate exact tipul erorii în terminal, nu doar "0"
+        print(f"Eroare la citire inscrieri: {repr(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         if cursor:
