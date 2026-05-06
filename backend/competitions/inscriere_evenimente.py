@@ -1,4 +1,4 @@
-from flask import request, jsonify
+from flask import Blueprint, request, jsonify
 # Asigură-te că ai importat decoratorul tău pentru token (ex: @token_required)
 
 
