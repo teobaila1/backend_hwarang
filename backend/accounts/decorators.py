@@ -3,8 +3,7 @@ import jwt
 from functools import wraps
 from flask import request, jsonify
 
-# Folosim aceeași cheie secretă ca în autentificare.py
-SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
+from backend.config import SECRET_KEY
 
 
 def token_required(f):

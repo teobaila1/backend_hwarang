@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from backend.config import get_conn
+from backend.config import get_conn, SECRET_KEY
 from backend.accounts.decorators import token_required
 import jwt
 import os
@@ -13,7 +13,6 @@ def inscrie_la_eveniment(eveniment_id):
     cursor = None
     try:
         token = request.headers.get('x-access-token')
-        SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         club_id = decoded_token.get('id')
 

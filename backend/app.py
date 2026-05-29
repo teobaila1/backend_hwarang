@@ -32,12 +32,13 @@ from backend.admin_diagnostic import admin_diagnostic_bp
 from backend.competitions.inscriere_evenimente import inscriere_evenimente_bp
 from backend.accounts.status import status_bp
 
+from backend.config import SECRET_KEY
+
 # from backend.migrare_copii import migrare_bp
 # from backend.users.reparare_copii import reparare_copii_bp
 # from backend.users.adaugare_fortata import adaugare_fortata_bp
 import os
 
-SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
 
 app = Flask(__name__)
 # ✅ Setezi CORS pentru local și Netlify

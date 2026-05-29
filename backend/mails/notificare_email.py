@@ -4,6 +4,8 @@ from threading import Thread  # <--- IMPORT VITEZĂ
 from flask import Blueprint, request, jsonify
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+from backend.config import SECRET_KEY
+
 from ..config import get_conn
 from ..passwords.security import hash_password
 
@@ -15,7 +17,6 @@ resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_IDENTITY = "ACS Hwarang Sibiu <site@hwarang.ro>"
 
 # Configurare Securitate
-SECRET_KEY = os.environ.get("SECRET_KEY", "schimba-asta-in-env!")
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hwarang.ro").rstrip("/")
 

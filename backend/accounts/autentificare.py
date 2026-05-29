@@ -3,11 +3,11 @@ import jwt
 import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.security import check_password_hash
-from backend.config import get_conn
+from backend.config import get_conn, SECRET_KEY
+
 
 autentificare_bp = Blueprint('autentificare', __name__)
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "cheie_super_secreta_hwarang_2026")
 
 
 @autentificare_bp.route('/api/autentificare', methods=['POST'])

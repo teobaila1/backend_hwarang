@@ -24,6 +24,11 @@ except Exception as e:
 # Postgres (Render)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# SECRET_KEY — pentru JWT si tokens. OBLIGATORIU in .env/Render
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY lipseste din variabilele de mediu!")
+
 # Fallback pentru local dev (dacă vrei să mai rulezi pe sqlite)
 DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).with_name("users.db")))
 

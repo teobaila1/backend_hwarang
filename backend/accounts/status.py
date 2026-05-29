@@ -4,6 +4,8 @@ from backend.accounts.decorators import token_required
 import jwt
 import os
 
+from backend.config import SECRET_KEY
+
 status_bp = Blueprint('status', __name__)
 
 
@@ -26,7 +28,6 @@ def heartbeat():
         # Dacă vizitatorul are și un token (este logat), îi aflăm numele real
         if token:
             try:
-                SECRET_KEY = os.getenv("SECRET_KEY", "schimba-asta-in-productie")
                 decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
                 # Presupunând că în token salvezi "nume_club" sau un identificator
                 nume_utilizator = decoded.get('nume_club', 'Club Logat') 
