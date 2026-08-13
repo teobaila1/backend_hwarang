@@ -3,11 +3,11 @@ from backend.config import get_conn
 from backend.accounts.decorators import token_required
 import jwt
 import os
+
 from backend.config import SECRET_KEY
 
 status_bp = Blueprint('status', __name__)
 
-# ATENȚIE: FĂRĂ @token_required la heartbeat!
 @status_bp.route('/api/status/heartbeat', methods=['POST'])
 def heartbeat():
     conn = None
@@ -23,20 +23,18 @@ def heartbeat():
         nume_utilizator = "Vizitator Anonim"
         token = request.headers.get('x-access-token')
 
-        # Dacă vizitatorul are și un token (este logat), îi aflăm numele real
         if token:
             try:
                 decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-                # FIX: Am modificat din 'nume_club' în 'username'
                 nume_utilizator = decoded.get('username', 'Utilizator Logat') 
             except Exception:
-                pass # Dacă tokenul a expirat sau e invalid, rămâne vizitator anonim
+                pass 
 
         conn = get_conn()
         cursor = conn.cursor()
         
-        # FIX: Folosim timpul specific pentru România direct din PostgreSQL
-        query = """
+        # 1. Update tabel online curent
+        query_online = """
             INSERT INTO online_users (session_id, nume_utilizator, ultima_activitate, pagina_curenta)
             VALUES (%s, %s, NOW() AT TIME ZONE 'Europe/Bucharest', %s)
             ON CONFLICT (session_id) 
@@ -45,7 +43,26 @@ def heartbeat():
                 pagina_curenta = EXCLUDED.pagina_curenta,
                 nume_utilizator = EXCLUDED.nume_utilizator;
         """
-        cursor.execute(query, (session_id, nume_utilizator, pagina))
+        cursor.execute(query_online, (session_id, nume_utilizator, pagina))
+
+        # 2. Logică pentru ISTORIC (Inserăm doar dacă pagina s-a schimbat)
+        cursor.execute("""
+            SELECT pagina_accesata 
+            FROM istoric_navigare 
+            WHERE session_id = %s 
+            ORDER BY data_accesare DESC 
+            LIMIT 1
+        """, (session_id,))
+        
+        last_page_row = cursor.fetchone()
+        last_page = last_page_row[0] if last_page_row else None
+
+        if last_page != pagina:
+            cursor.execute("""
+                INSERT INTO istoric_navigare (session_id, nume_utilizator, pagina_accesata, data_accesare)
+                VALUES (%s, %s, %s, NOW() AT TIME ZONE 'Europe/Bucharest')
+            """, (session_id, nume_utilizator, pagina))
+
         conn.commit()
         return jsonify({"status": "alive"}), 200
 
@@ -56,49 +73,48 @@ def heartbeat():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Ruta pentru a CITI cine e online
-@status_bp.route('/api/status/online', methods=['GET'])
+# RUTA NOUĂ PENTRU ADMINI - ISTORIC
+@status_bp.route('/api/status/istoric', methods=['GET'])
 @token_required 
-def get_online_users():
+def get_istoric_navigare():
     conn = None
     cursor = None
     try:
         conn = get_conn()
         cursor = conn.cursor()
         
-        # FIX: Folosim timpul României și formatăm data frumos pentru a fi trimisă în răspuns
+        # Extragem ultimele 200 de acțiuni, ordonate de la cea mai recentă
         query = """
             SELECT 
+                session_id,
                 nume_utilizator, 
-                pagina_curenta, 
-                TO_CHAR(ultima_activitate, 'DD-MM-YYYY HH24:MI:SS') as ora_romaniei
-            FROM online_users 
-            WHERE ultima_activitate > (NOW() AT TIME ZONE 'Europe/Bucharest') - INTERVAL '1 minute'
-            ORDER BY 
-                CASE WHEN nume_utilizator = 'Vizitator Anonim' THEN 2 ELSE 1 END,
-                ultima_activitate DESC
+                pagina_accesata, 
+                TO_CHAR(data_accesare, 'DD-MM-YYYY HH24:MI:SS') as ora_romaniei
+            FROM istoric_navigare 
+            ORDER BY data_accesare DESC
+            LIMIT 200
         """
         cursor.execute(query)
         users = cursor.fetchall()
         
-        online_list = []
+        istoric_list = []
         for u in users:
             if isinstance(u, dict):
-                # Dacă folosești psycopg2.extras.RealDictCursor
-                online_list.append({
+                istoric_list.append({
+                    "session_id": u.get("session_id"),
                     "nume": u.get("nume_utilizator"), 
-                    "pagina": u.get("pagina_curenta"),
-                    "ultima_activitate": u.get("ora_romaniei")
+                    "pagina": u.get("pagina_accesata"),
+                    "data": u.get("ora_romaniei")
                 })
             else:
-                # Dacă folosești cursor normal (tuple)
-                online_list.append({
-                    "nume": u[0], 
-                    "pagina": u[1],
-                    "ultima_activitate": u[2]
+                istoric_list.append({
+                    "session_id": u[0],
+                    "nume": u[1], 
+                    "pagina": u[2],
+                    "data": u[3]
                 })
                 
-        return jsonify(online_list), 200
+        return jsonify(istoric_list), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
