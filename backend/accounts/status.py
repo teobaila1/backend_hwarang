@@ -3,11 +3,9 @@ from backend.config import get_conn
 from backend.accounts.decorators import token_required
 import jwt
 import os
-
 from backend.config import SECRET_KEY
 
 status_bp = Blueprint('status', __name__)
-
 
 # ATENȚIE: FĂRĂ @token_required la heartbeat!
 @status_bp.route('/api/status/heartbeat', methods=['POST'])
@@ -29,21 +27,21 @@ def heartbeat():
         if token:
             try:
                 decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-                # Presupunând că în token salvezi "nume_club" sau un identificator
-                nume_utilizator = decoded.get('nume_club', 'Club Logat') 
+                # FIX: Am modificat din 'nume_club' în 'username'
+                nume_utilizator = decoded.get('username', 'Utilizator Logat') 
             except Exception:
                 pass # Dacă tokenul a expirat sau e invalid, rămâne vizitator anonim
 
         conn = get_conn()
         cursor = conn.cursor()
         
-        # Inserăm sau actualizăm sesiunea curentă
+        # FIX: Folosim timpul specific pentru România direct din PostgreSQL
         query = """
             INSERT INTO online_users (session_id, nume_utilizator, ultima_activitate, pagina_curenta)
-            VALUES (%s, %s, NOW(), %s)
+            VALUES (%s, %s, NOW() AT TIME ZONE 'Europe/Bucharest', %s)
             ON CONFLICT (session_id) 
             DO UPDATE SET 
-                ultima_activitate = NOW(), 
+                ultima_activitate = NOW() AT TIME ZONE 'Europe/Bucharest', 
                 pagina_curenta = EXCLUDED.pagina_curenta,
                 nume_utilizator = EXCLUDED.nume_utilizator;
         """
@@ -58,7 +56,7 @@ def heartbeat():
         if cursor: cursor.close()
         if conn: conn.close()
 
-# Ruta pentru a CITI cine e online (Aici PUI @token_required, ca să vadă doar adminii lista)
+# Ruta pentru a CITI cine e online
 @status_bp.route('/api/status/online', methods=['GET'])
 @token_required 
 def get_online_users():
@@ -67,11 +65,15 @@ def get_online_users():
     try:
         conn = get_conn()
         cursor = conn.cursor()
-        # Considerăm online pe oricine a dat puls în ultimele 60 de secunde
+        
+        # FIX: Folosim timpul României și formatăm data frumos pentru a fi trimisă în răspuns
         query = """
-            SELECT nume_utilizator, pagina_curenta, ultima_activitate 
+            SELECT 
+                nume_utilizator, 
+                pagina_curenta, 
+                TO_CHAR(ultima_activitate, 'DD-MM-YYYY HH24:MI:SS') as ora_romaniei
             FROM online_users 
-            WHERE ultima_activitate > NOW() - INTERVAL '1 minute'
+            WHERE ultima_activitate > (NOW() AT TIME ZONE 'Europe/Bucharest') - INTERVAL '1 minute'
             ORDER BY 
                 CASE WHEN nume_utilizator = 'Vizitator Anonim' THEN 2 ELSE 1 END,
                 ultima_activitate DESC
@@ -82,9 +84,19 @@ def get_online_users():
         online_list = []
         for u in users:
             if isinstance(u, dict):
-                online_list.append({"nume": u.get("nume_utilizator"), "pagina": u.get("pagina_curenta")})
+                # Dacă folosești psycopg2.extras.RealDictCursor
+                online_list.append({
+                    "nume": u.get("nume_utilizator"), 
+                    "pagina": u.get("pagina_curenta"),
+                    "ultima_activitate": u.get("ora_romaniei")
+                })
             else:
-                online_list.append({"nume": u[0], "pagina": u[1]})
+                # Dacă folosești cursor normal (tuple)
+                online_list.append({
+                    "nume": u[0], 
+                    "pagina": u[1],
+                    "ultima_activitate": u[2]
+                })
                 
         return jsonify(online_list), 200
     except Exception as e:
