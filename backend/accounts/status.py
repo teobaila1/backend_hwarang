@@ -70,7 +70,14 @@ def heartbeat():
         """, (session_id,))
         
         last_page_row = cursor.fetchone()
-        last_page = last_page_row[0] if last_page_row else None
+        
+        last_page = None
+        if last_page_row:
+            # Verificăm dacă e dicționar (RealDictCursor) sau tuplu normal
+            if isinstance(last_page_row, dict):
+                last_page = last_page_row.get('pagina_accesata')
+            else:
+                last_page = last_page_row[0]
 
         if last_page != pagina:
             cursor.execute("""
