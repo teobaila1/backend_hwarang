@@ -31,6 +31,7 @@ from backend.users.elevi import elevi_bp
 from backend.admin_diagnostic import admin_diagnostic_bp
 from backend.competitions.inscriere_evenimente import inscriere_evenimente_bp
 from backend.accounts.status import status_bp
+from backend.exams import exams_bp
 
 from backend.config import SECRET_KEY
 
@@ -82,6 +83,7 @@ app.register_blueprint(admin_diagnostic_bp)
 app.register_blueprint(notificari_plata_bp)
 app.register_blueprint(inscriere_evenimente_bp)
 app.register_blueprint(status_bp)
+app.register_blueprint(exams_bp)
 
 
 
