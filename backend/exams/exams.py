@@ -31,7 +31,7 @@ def get_eligibilitate_sportivi():
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
                 WHERE sportiv_id::text = u.id::text
-                ORDER BY data_examen DESC LIMIT 1
+                ORDER BY data_examen DESC, id DESC LIMIT 1
             ) e ON true
             WHERE u.rol = 'Sportiv' AND COALESCE(p.activ, true) = true
 
@@ -52,7 +52,7 @@ def get_eligibilitate_sportivi():
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
                 WHERE sportiv_id::text = c.id::text
-                ORDER BY data_examen DESC LIMIT 1
+                ORDER BY data_examen DESC, id DESC LIMIT 1
             ) e ON true
         """
         cur.execute(query)
