@@ -1,13 +1,4 @@
 from flask import Blueprint, jsonify, request
-from datetime import datetime
-import psycopg2
-import psycopg2.extras
-from backend.config import get_conn
-from backend.accounts.decorators import token_required
-
-exams_bp = Blueprint('exams', __name__)
-
-from flask import Blueprint, jsonify, request
 from datetime import datetime, date
 import psycopg2
 import psycopg2.extras
@@ -19,10 +10,10 @@ exams_bp = Blueprint('exams', __name__)
 def calculeaza_varsta_si_categorie(cnp, data_nasterii_db):
     dob = None
     
-    # 1. Dacă avem data nașterii direct în baza de date
+    # 1. Folosim data nașterii din baza de date dacă există
     if data_nasterii_db:
         dob = data_nasterii_db
-    # 2. Dacă avem CNP valid de 13 caractere, extragem data nașterii
+    # 2. Altfel, dacă avem CNP valid de 13 caractere, extragem data nașterii din el
     elif cnp and len(cnp) == 13 and cnp.isdigit():
         s = int(cnp[0])
         an_pre = 1900
@@ -45,7 +36,6 @@ def calculeaza_varsta_si_categorie(cnp, data_nasterii_db):
     azi = date.today()
     age = azi.year - dob.year - ((azi.month, azi.day) < (dob.month, dob.day))
 
-    # Criterii standard de vârstă pentru categorii
     if age >= 18:
         categorie = "SENIOR"
     elif age >= 15:
@@ -70,12 +60,10 @@ def calculeaza_timp_scurs(ultima_gradare):
     if zile_totale < 0:
         return 0, 0, "Data în viitor", False
 
-    # Calcul luni exacte
     luni = (azi.year - ultima_gradare.year) * 12 + (azi.month - ultima_gradare.month)
     if azi.day < ultima_gradare.day:
         luni -= 1
 
-    # Calcul zile rămase peste luni
     an_tinta = ultima_gradare.year + (ultima_gradare.month - 1 + luni) // 12
     luna_tinta = (ultima_gradare.month - 1 + luni) % 12 + 1
     
@@ -100,12 +88,12 @@ def get_eligibilitate_sportivi():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         query = """
-            -- 1. Sportivii cu cont propriu (rol 'Sportiv')
+            -- 1. Sportivii cu cont propriu (preluăm data_nasterii din profil_sportiv sau utilizatori)
             SELECT 
                 u.id::text as id, 
                 u.nume_complet,
                 p.cnp,
-                p.data_nasterii as data_nasterii_profil,
+                COALESCE(p.data_nasterii, u.data_nasterii) as data_nasterii,
                 p.activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
@@ -123,12 +111,12 @@ def get_eligibilitate_sportivi():
 
             UNION ALL
 
-            -- 2. Copiii afiliați părinților
+            -- 2. Copiii afiliați părinților (preluăm data_nasterii din tabela copii)
             SELECT 
                 c.id::text as id, 
                 c.nume as nume_complet, 
                 NULL::varchar as cnp, 
-                c.data_nasterii as data_nasterii_profil,
+                c.data_nasterii,
                 true as activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
@@ -149,12 +137,13 @@ def get_eligibilitate_sportivi():
 
         for s in sportivi:
             luni, zile, text_timp, eligibil_timp = calculeaza_timp_scurs(s['ultima_gradare'])
-            categorie, varsta = calculeaza_varsta_si_categorie(s['cnp'], s['data_nasterii_profil'])
+            categorie, varsta = calculeaza_varsta_si_categorie(s['cnp'], s['data_nasterii'])
 
             rezultate.append({
                 "id": s['id'],
                 "nume": s['nume_complet'] or "Fără Nume",
                 "cnp": s['cnp'] or "Necompletat", 
+                "data_nasterii": s['data_nasterii'].strftime('%Y-%m-%d') if s['data_nasterii'] else "",
                 "centura": s['centura_curenta'] or "10 Gup - Albă",
                 "data_ultimului_examen": s['ultima_gradare'].strftime('%d.%m.%Y') if s['ultima_gradare'] else "Niciun examen",
                 "luni_trecute": luni,
@@ -176,7 +165,6 @@ def get_eligibilitate_sportivi():
         if conn: conn.close()
 
 
-# Rută nouă pentru actualizarea datelor personale ale sportivului
 @exams_bp.route('/api/sportivi/actualizeaza', methods=['PUT'])
 @token_required
 def actualizeaza_sportiv():
@@ -185,9 +173,10 @@ def actualizeaza_sportiv():
     try:
         data = request.json
         sportiv_id = data.get('id')
-        tip = data.get('tip') # 'utilizator' sau 'copil'
+        tip = data.get('tip') 
         nume = data.get('nume')
         cnp = data.get('cnp')
+        data_nasterii = data.get('data_nasterii') or None
 
         if not sportiv_id or not nume:
             return jsonify({"status": "error", "message": "ID-ul și numele sunt obligatorii!"}), 400
@@ -195,17 +184,15 @@ def actualizeaza_sportiv():
         cur = conn.cursor()
 
         if tip == 'utilizator':
-            # Actualizăm numele în utilizatori
             cur.execute("UPDATE utilizatori SET nume_complet = %s WHERE id = %s", (nume, int(sportiv_id)))
-            # Actualizăm sau inserăm CNP-ul în profil_sportiv
             cur.execute("""
-                INSERT INTO profil_sportiv (utilizator_id, cnp) VALUES (%s, %s)
-                ON CONFLICT (utilizator_id) DO UPDATE SET cnp = EXCLUDED.cnp
-            """, (int(sportiv_id), cnp))
+                INSERT INTO profil_sportiv (utilizator_id, cnp, data_nasterii) 
+                VALUES (%s, %s, %s)
+                ON CONFLICT (utilizator_id) 
+                DO UPDATE SET cnp = EXCLUDED.cnp, data_nasterii = EXCLUDED.data_nasterii
+            """, (int(sportiv_id), cnp, data_nasterii))
         else:
-            # Actualizăm în tabela copii (numele)
-            cur.execute("UPDATE copii SET nume = %s WHERE id::text = %s", (nume, sportiv_id))
-            # Notă: Dacă ai adăugat o coloană de cnp și în tabela copii, poți face update și acolo.
+            cur.execute("UPDATE copii SET nume = %s, data_nasterii = %s WHERE id::text = %s", (nume, data_nasterii, sportiv_id))
 
         conn.commit()
         return jsonify({"status": "success", "message": "Datele au fost actualizate cu succes!"}), 200
