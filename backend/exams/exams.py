@@ -7,6 +7,91 @@ from backend.accounts.decorators import token_required
 
 exams_bp = Blueprint('exams', __name__)
 
+from flask import Blueprint, jsonify, request
+from datetime import datetime, date
+import psycopg2
+import psycopg2.extras
+from backend.config import get_conn
+from backend.accounts.decorators import token_required
+
+exams_bp = Blueprint('exams', __name__)
+
+def calculeaza_varsta_si_categorie(cnp, data_nasterii_db):
+    dob = None
+    
+    # 1. Dacă avem data nașterii direct în baza de date
+    if data_nasterii_db:
+        dob = data_nasterii_db
+    # 2. Dacă avem CNP valid de 13 caractere, extragem data nașterii
+    elif cnp and len(cnp) == 13 and cnp.isdigit():
+        s = int(cnp[0])
+        an_pre = 1900
+        if s in [1, 2]: an_pre = 1900
+        elif s in [3, 4]: an_pre = 1800
+        elif s in [5, 6]: an_pre = 2000
+        elif s in [7, 8]: an_pre = 1900
+        
+        an = an_pre + int(cnp[1:3])
+        luna = int(cnp[3:5])
+        zi = int(cnp[5:7])
+        try:
+            dob = date(an, luna, zi)
+        except:
+            dob = None
+
+    if not dob:
+        return "Nespecificat", 0
+
+    azi = date.today()
+    age = azi.year - dob.year - ((azi.month, azi.day) < (dob.month, dob.day))
+
+    # Criterii standard de vârstă pentru categorii
+    if age >= 18:
+        categorie = "SENIOR"
+    elif age >= 15:
+        categorie = "JUNIOR I"
+    elif age >= 12:
+        categorie = "JUNIOR II"
+    elif age >= 9:
+        categorie = "JUNIOR III"
+    else:
+        categorie = "COPII"
+
+    return categorie, age
+
+def calculeaza_timp_scurs(ultima_gradare):
+    if not ultima_gradare:
+        return 0, 0, "Niciun examen", True
+
+    azi = date.today()
+    delta = azi - ultima_gradare
+    zile_totale = delta.days
+
+    if zile_totale < 0:
+        return 0, 0, "Data în viitor", False
+
+    # Calcul luni exacte
+    luni = (azi.year - ultima_gradare.year) * 12 + (azi.month - ultima_gradare.month)
+    if azi.day < ultima_gradare.day:
+        luni -= 1
+
+    # Calcul zile rămase peste luni
+    an_tinta = ultima_gradare.year + (ultima_gradare.month - 1 + luni) // 12
+    luna_tinta = (ultima_gradare.month - 1 + luni) % 12 + 1
+    
+    import calendar
+    last_day = calendar.monthrange(an_tinta, luna_tinta)[1]
+    zi_tinta = min(ultima_gradare.day, last_day)
+    
+    data_intermediare = date(an_tinta, luna_tinta, zi_tinta)
+    zile_ramase = (azi - data_intermediare).days
+
+    eligibil = luni >= 3
+    text_timp = f"{luni} luni și {zile_ramase} zile scurse"
+
+    return luni, zile_ramase, text_timp, eligibil
+
+
 @exams_bp.route('/api/sportivi/eligibilitate', methods=['GET'])
 @token_required
 def get_eligibilitate_sportivi():
@@ -20,6 +105,7 @@ def get_eligibilitate_sportivi():
                 u.id::text as id, 
                 u.nume_complet,
                 p.cnp,
+                p.data_nasterii as data_nasterii_profil,
                 p.activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
@@ -42,6 +128,7 @@ def get_eligibilitate_sportivi():
                 c.id::text as id, 
                 c.nume as nume_complet, 
                 NULL::varchar as cnp, 
+                c.data_nasterii as data_nasterii_profil,
                 true as activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
@@ -59,18 +146,10 @@ def get_eligibilitate_sportivi():
         sportivi = cur.fetchall()
 
         rezultate = []
-        azi = datetime.today().date()
 
         for s in sportivi:
-            luni_trecute = 0
-            eligibil_timp = False
-            
-            if s['ultima_gradare']:
-                luni_trecute = (azi.year - s['ultima_gradare'].year) * 12 + (azi.month - s['ultima_gradare'].month)
-                if luni_trecute >= 3:
-                    eligibil_timp = True
-            else:
-                eligibil_timp = True # Dacă nu a dat niciun examen, e eligibil ca timp
+            luni, zile, text_timp, eligibil_timp = calculeaza_timp_scurs(s['ultima_gradare'])
+            categorie, varsta = calculeaza_varsta_si_categorie(s['cnp'], s['data_nasterii_profil'])
 
             rezultate.append({
                 "id": s['id'],
@@ -78,10 +157,14 @@ def get_eligibilitate_sportivi():
                 "cnp": s['cnp'] or "Necompletat", 
                 "centura": s['centura_curenta'] or "10 Gup - Albă",
                 "data_ultimului_examen": s['ultima_gradare'].strftime('%d.%m.%Y') if s['ultima_gradare'] else "Niciun examen",
-                "luni_trecute": luni_trecute,
+                "luni_trecute": luni,
+                "zile_trecute": zile,
+                "text_timp": text_timp,
                 "este_eligibil": eligibil_timp,
                 "feedback": s['feedback_antrenor'],
-                "tip": s['tip_inregistrare']
+                "tip": s['tip_inregistrare'],
+                "categorie": categorie,
+                "varsta": varsta
             })
 
         return jsonify(rezultate), 200
