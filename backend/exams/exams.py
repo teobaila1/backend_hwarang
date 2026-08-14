@@ -14,7 +14,6 @@ def get_eligibilitate_sportivi():
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
-        # Această interogare aduce ÎMPREUNĂ sportivii direcți și copiii părinților
         query = """
             -- 1. Sportivii cu cont propriu (rol 'Sportiv')
             SELECT 
@@ -38,10 +37,10 @@ def get_eligibilitate_sportivi():
 
             UNION ALL
 
-            -- 2. Copiii afiliați părinților (fără CNP în tabelă, tratat ca NULL)
+            -- 2. Copiii afiliați părinților (cu conversie explicită ::integer pe id)
             SELECT 
-                c.id, 
-                c.nume as nume_complet, -- Asigură-te că în tabela copii coloana de nume se numește 'nume'
+                c.id::integer, 
+                c.nume as nume_complet, 
                 NULL::varchar as cnp, 
                 true as activ,
                 e.centura_obtinuta as centura_curenta,
@@ -52,7 +51,7 @@ def get_eligibilitate_sportivi():
             LEFT JOIN LATERAL (
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
-                WHERE sportiv_id = c.id
+                WHERE sportiv_id = c.id::integer
                 ORDER BY data_examen DESC LIMIT 1
             ) e ON true
         """
@@ -83,7 +82,7 @@ def get_eligibilitate_sportivi():
                 "luni_trecute": luni_trecute,
                 "este_eligibil": eligibil_timp,
                 "feedback": s['feedback_antrenor'],
-                "tip": s['tip_inregistrare'] # Să știi dacă e sportiv independent sau copil de părinte
+                "tip": s['tip_inregistrare']
             })
 
         return jsonify(rezultate), 200
