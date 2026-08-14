@@ -38,12 +38,12 @@ def get_eligibilitate_sportivi():
 
             UNION ALL
 
-            -- 2. Copiii afiliați părinților (din tabela de copii a clubului)
+            -- 2. Copiii afiliați părinților (fără CNP în tabelă, tratat ca NULL)
             SELECT 
                 c.id, 
-                c.nume as nume_complet,
-                c.cnp,
-                true as activ, -- Presupunem că sunt activi
+                c.nume as nume_complet, -- Asigură-te că în tabela copii coloana de nume se numește 'nume'
+                NULL::varchar as cnp, 
+                true as activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
                 e.feedback_antrenor,
