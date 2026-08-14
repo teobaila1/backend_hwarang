@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from datetime import datetime
-from dateutil.relativedelta import relativedelta # Foarte utilă pentru a calcula diferența în luni
+import psycopg2
+import psycopg2.extras
 from backend.config import get_conn
 from backend.accounts.decorators import token_required
 
@@ -14,7 +15,6 @@ def get_eligibilitate_sportivi():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # Interogare care aduce sportivii, prezențele lor totale și datele ultimului examen
-        # Presupunem că ai o funcție sau un view care îți dă numărul de prezențe curente
         query = """
             SELECT 
                 u.id, u.nume_complet, u.cnp,
@@ -43,14 +43,17 @@ def get_eligibilitate_sportivi():
             eligibil_prezente = False
             
             if s['ultima_gradare']:
-                diferenta = relativedelta(azi, s['ultima_gradare'])
-                luni_trecute = diferenta.years * 12 + diferenta.months
+                # Calculăm matematic diferența de luni folosind pachetul standard datetime
+                luni_trecute = (azi.year - s['ultima_gradare'].year) * 12 + (azi.month - s['ultima_gradare'].month)
                 
-                # Regula: între 3 și 6 luni
+                # Regula: minim 3 luni
                 if luni_trecute >= 3:
                     eligibil_timp = True
+            else:
+                # Dacă nu are nicio gradare (e nou), putem considera că e eligibil pentru prima centură ca timp
+                eligibil_timp = True
 
-            # Regula: minim 24 de prezențe de la ultimul examen (exemplu)
+            # Regula: minim 24 de prezențe de la ultimul examen
             prezente = s.get('prezente_curente', 0)
             if prezente >= 24:
                 eligibil_prezente = True
@@ -72,4 +75,46 @@ def get_eligibilitate_sportivi():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
+        if conn: conn.close()
+
+
+
+@exams_bp.route('/api/sportivi/examen/salvare', methods=['POST'])
+@token_required
+def salveaza_examen():
+    conn = get_conn()
+    cur = None
+    try:
+        data = request.json
+        sportiv_id = data.get('sportiv_id')
+        centura_obtinuta = data.get('centura')
+        data_examen = data.get('data_examen') # Format așteptat: YYYY-MM-DD
+        prezente = data.get('prezente', 0)
+        feedback = data.get('feedback', '')
+
+        # Validare de bază
+        if not sportiv_id or not centura_obtinuta or not data_examen:
+            return jsonify({"status": "error", "message": "Date incomplete. Sportivul, centura și data sunt obligatorii."}), 400
+
+        cur = conn.cursor()
+        
+        # Inserăm noul examen în istoric
+        query = """
+            INSERT INTO examene_centura 
+            (sportiv_id, centura_obtinuta, data_examen, prezente_la_momentul_respectiv, feedback_antrenor)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cur.execute(query, (sportiv_id, centura_obtinuta, data_examen, prezente, feedback))
+        
+        # OBLIGATORIU: Salvăm modificările în baza de date
+        conn.commit()
+        
+        return jsonify({"status": "success", "message": "Examenul a fost salvat cu succes!"}), 201
+
+    except Exception as e:
+        if conn: conn.rollback() # Anulăm tranzacția în caz de eroare
+        print(f"[EROARE SALVARE EXAMEN]: {str(e)}")
+        return jsonify({"status": "error", "message": "Eroare la salvarea examenului."}), 500
+    finally:
+        if cur: cur.close()
         if conn: conn.close()
