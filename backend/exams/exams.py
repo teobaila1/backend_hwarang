@@ -14,22 +14,47 @@ def get_eligibilitate_sportivi():
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
-        # Interogare care aduce sportivii, prezențele lor totale și datele ultimului examen
+        # Această interogare aduce ÎMPREUNĂ sportivii direcți și copiii părinților
         query = """
+            -- 1. Sportivii cu cont propriu (rol 'Sportiv')
             SELECT 
-                u.id, u.nume_complet, u.cnp,
+                u.id, 
+                u.nume_complet,
+                p.cnp,
+                p.activ,
                 e.centura_obtinuta as centura_curenta,
                 e.data_examen as ultima_gradare,
-                u.prezente_curente, -- Camp ipotetic calculat din pontaj
-                e.feedback_antrenor
+                e.feedback_antrenor,
+                'utilizator' as tip_inregistrare
             FROM utilizatori u
+            LEFT JOIN profil_sportiv p ON u.id = p.utilizator_id
             LEFT JOIN LATERAL (
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
                 WHERE sportiv_id = u.id
                 ORDER BY data_examen DESC LIMIT 1
             ) e ON true
-            WHERE u.rol IN ('Sportiv', 'Parinte') AND u.activ = true
+            WHERE u.rol = 'Sportiv' AND COALESCE(p.activ, true) = true
+
+            UNION ALL
+
+            -- 2. Copiii afiliați părinților (din tabela de copii a clubului)
+            SELECT 
+                c.id, 
+                c.nume as nume_complet,
+                c.cnp,
+                true as activ, -- Presupunem că sunt activi
+                e.centura_obtinuta as centura_curenta,
+                e.data_examen as ultima_gradare,
+                e.feedback_antrenor,
+                'copil' as tip_inregistrare
+            FROM copii c
+            LEFT JOIN LATERAL (
+                SELECT centura_obtinuta, data_examen, feedback_antrenor
+                FROM examene_centura
+                WHERE sportiv_id = c.id
+                ORDER BY data_examen DESC LIMIT 1
+            ) e ON true
         """
         cur.execute(query)
         sportivi = cur.fetchall()
@@ -40,39 +65,31 @@ def get_eligibilitate_sportivi():
         for s in sportivi:
             luni_trecute = 0
             eligibil_timp = False
-            eligibil_prezente = False
             
             if s['ultima_gradare']:
-                # Calculăm matematic diferența de luni folosind pachetul standard datetime
                 luni_trecute = (azi.year - s['ultima_gradare'].year) * 12 + (azi.month - s['ultima_gradare'].month)
-                
-                # Regula: minim 3 luni
                 if luni_trecute >= 3:
                     eligibil_timp = True
             else:
-                # Dacă nu are nicio gradare (e nou), putem considera că e eligibil pentru prima centură ca timp
                 eligibil_timp = True
-
-            # Regula: minim 24 de prezențe de la ultimul examen
-            prezente = s.get('prezente_curente', 0)
-            if prezente >= 24:
-                eligibil_prezente = True
 
             rezultate.append({
                 "id": s['id'],
-                "nume": s['nume_complet'],
-                "cnp": s['cnp'],
-                "centura": s['centura_curenta'] or "Centura Albă (10 Gup)",
+                "nume": s['nume_complet'] or "Fără Nume",
+                "cnp": s['cnp'] or "Necompletat", 
+                "prezente": 0, 
+                "centura": s['centura_curenta'] or "10 Gup - Albă",
                 "data_ultimului_examen": s['ultima_gradare'].strftime('%d.%m.%Y') if s['ultima_gradare'] else "Niciun examen",
                 "luni_trecute": luni_trecute,
-                "prezente": prezente,
-                "este_eligibil": eligibil_timp and eligibil_prezente,
-                "feedback": s['feedback_antrenor']
+                "este_eligibil": eligibil_timp,
+                "feedback": s['feedback_antrenor'],
+                "tip": s['tip_inregistrare'] # Să știi dacă e sportiv independent sau copil de părinte
             })
 
         return jsonify(rezultate), 200
 
     except Exception as e:
+        print(f"[EROARE SQL GET ELIGIBILITATE]: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if conn: conn.close()
