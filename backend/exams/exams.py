@@ -15,7 +15,7 @@ def get_eligibilitate_sportivi():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         query = """
-            -- 1. Sportivii cu cont propriu (rol 'Sportiv') - convertim id la text pentru compatibilitate
+            -- 1. Sportivii cu cont propriu (rol 'Sportiv')
             SELECT 
                 u.id::text as id, 
                 u.nume_complet,
@@ -37,7 +37,7 @@ def get_eligibilitate_sportivi():
 
             UNION ALL
 
-            -- 2. Copiii afiliați părinților (id-ul este deja text/UUID)
+            -- 2. Copiii afiliați părinților
             SELECT 
                 c.id::text as id, 
                 c.nume as nume_complet, 
@@ -70,13 +70,12 @@ def get_eligibilitate_sportivi():
                 if luni_trecute >= 3:
                     eligibil_timp = True
             else:
-                eligibil_timp = True
+                eligibil_timp = True # Dacă nu a dat niciun examen, e eligibil ca timp
 
             rezultate.append({
                 "id": s['id'],
                 "nume": s['nume_complet'] or "Fără Nume",
                 "cnp": s['cnp'] or "Necompletat", 
-                "prezente": 0, 
                 "centura": s['centura_curenta'] or "10 Gup - Albă",
                 "data_ultimului_examen": s['ultima_gradare'].strftime('%d.%m.%Y') if s['ultima_gradare'] else "Niciun examen",
                 "luni_trecute": luni_trecute,
@@ -94,6 +93,48 @@ def get_eligibilitate_sportivi():
         if conn: conn.close()
 
 
+# Rută nouă pentru actualizarea datelor personale ale sportivului
+@exams_bp.route('/api/sportivi/actualizeaza', methods=['PUT'])
+@token_required
+def actualizeaza_sportiv():
+    conn = get_conn()
+    cur = None
+    try:
+        data = request.json
+        sportiv_id = data.get('id')
+        tip = data.get('tip') # 'utilizator' sau 'copil'
+        nume = data.get('nume')
+        cnp = data.get('cnp')
+
+        if not sportiv_id or not nume:
+            return jsonify({"status": "error", "message": "ID-ul și numele sunt obligatorii!"}), 400
+
+        cur = conn.cursor()
+
+        if tip == 'utilizator':
+            # Actualizăm numele în utilizatori
+            cur.execute("UPDATE utilizatori SET nume_complet = %s WHERE id = %s", (nume, int(sportiv_id)))
+            # Actualizăm sau inserăm CNP-ul în profil_sportiv
+            cur.execute("""
+                INSERT INTO profil_sportiv (utilizator_id, cnp) VALUES (%s, %s)
+                ON CONFLICT (utilizator_id) DO UPDATE SET cnp = EXCLUDED.cnp
+            """, (int(sportiv_id), cnp))
+        else:
+            # Actualizăm în tabela copii (numele)
+            cur.execute("UPDATE copii SET nume = %s WHERE id::text = %s", (nume, sportiv_id))
+            # Notă: Dacă ai adăugat o coloană de cnp și în tabela copii, poți face update și acolo.
+
+        conn.commit()
+        return jsonify({"status": "success", "message": "Datele au fost actualizate cu succes!"}), 200
+
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"[EROARE ACTUALIZARE SPORTIV]: {str(e)}")
+        return jsonify({"status": "error", "message": "Eroare la actualizarea datelor."}), 500
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
 
 @exams_bp.route('/api/sportivi/examen/salvare', methods=['POST'])
 @token_required
@@ -104,31 +145,27 @@ def salveaza_examen():
         data = request.json
         sportiv_id = data.get('sportiv_id')
         centura_obtinuta = data.get('centura')
-        data_examen = data.get('data_examen') # Format așteptat: YYYY-MM-DD
-        prezente = data.get('prezente', 0)
+        data_examen = data.get('data_examen') 
         feedback = data.get('feedback', '')
 
-        # Validare de bază
         if not sportiv_id or not centura_obtinuta or not data_examen:
             return jsonify({"status": "error", "message": "Date incomplete. Sportivul, centura și data sunt obligatorii."}), 400
 
         cur = conn.cursor()
         
-        # Inserăm noul examen în istoric
         query = """
             INSERT INTO examene_centura 
-            (sportiv_id, centura_obtinuta, data_examen, prezente_la_momentul_respectiv, feedback_antrenor)
-            VALUES (%s, %s, %s, %s, %s)
+            (sportiv_id, centura_obtinuta, data_examen, feedback_antrenor)
+            VALUES (%s, %s, %s, %s)
         """
-        cur.execute(query, (sportiv_id, centura_obtinuta, data_examen, prezente, feedback))
-        
-        # OBLIGATORIU: Salvăm modificările în baza de date
+        # Salvăm sportiv_id ca string/text pentru a suporta atât int, cât și UUID
+        cur.execute(query, (str(sportiv_id), centura_obtinuta, data_examen, feedback))
         conn.commit()
         
         return jsonify({"status": "success", "message": "Examenul a fost salvat cu succes!"}), 201
 
     except Exception as e:
-        if conn: conn.rollback() # Anulăm tranzacția în caz de eroare
+        if conn: conn.rollback()
         print(f"[EROARE SALVARE EXAMEN]: {str(e)}")
         return jsonify({"status": "error", "message": "Eroare la salvarea examenului."}), 500
     finally:
