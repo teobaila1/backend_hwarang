@@ -42,7 +42,7 @@ def calculeaza_varsta_si_categorie(cnp, data_nasterii_db):
         categorie = "JUNIOR I"
     elif age >= 12:
         categorie = "JUNIOR II"
-    elif age >= 9:
+    elif age >= 5:
         categorie = "JUNIOR III"
     else:
         categorie = "COPII"
