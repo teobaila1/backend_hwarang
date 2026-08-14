@@ -15,9 +15,9 @@ def get_eligibilitate_sportivi():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         query = """
-            -- 1. Sportivii cu cont propriu (rol 'Sportiv')
+            -- 1. Sportivii cu cont propriu (rol 'Sportiv') - convertim id la text pentru compatibilitate
             SELECT 
-                u.id, 
+                u.id::text as id, 
                 u.nume_complet,
                 p.cnp,
                 p.activ,
@@ -30,16 +30,16 @@ def get_eligibilitate_sportivi():
             LEFT JOIN LATERAL (
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
-                WHERE sportiv_id = u.id
+                WHERE sportiv_id::text = u.id::text
                 ORDER BY data_examen DESC LIMIT 1
             ) e ON true
             WHERE u.rol = 'Sportiv' AND COALESCE(p.activ, true) = true
 
             UNION ALL
 
-            -- 2. Copiii afiliați părinților (cu conversie explicită ::integer pe id)
+            -- 2. Copiii afiliați părinților (id-ul este deja text/UUID)
             SELECT 
-                c.id::integer, 
+                c.id::text as id, 
                 c.nume as nume_complet, 
                 NULL::varchar as cnp, 
                 true as activ,
@@ -51,7 +51,7 @@ def get_eligibilitate_sportivi():
             LEFT JOIN LATERAL (
                 SELECT centura_obtinuta, data_examen, feedback_antrenor
                 FROM examene_centura
-                WHERE sportiv_id = c.id::integer
+                WHERE sportiv_id::text = c.id::text
                 ORDER BY data_examen DESC LIMIT 1
             ) e ON true
         """
