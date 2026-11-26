@@ -5,6 +5,10 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import socket  # <--- IMPORT IMPORTANT
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # --- FIX PENTRU RENDER + SUPABASE (IPv6 issue) ---
 # Acest cod forteaza aplicatia sa foloseasca IPv4.
