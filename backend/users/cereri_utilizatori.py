@@ -2,6 +2,7 @@ import json
 import uuid
 import re
 from datetime import datetime
+from threading import Thread
 from flask import Blueprint, request, jsonify
 from ..config import get_conn
 from ..accounts.inregistrare import trimite_email_acceptare, trimite_email_respingere
@@ -229,10 +230,11 @@ def accepta_cerere(cerere_id: int):
         cur.execute("DELETE FROM cereri_utilizatori WHERE id = %s", (cerere_id,))
         con.commit()
 
-        try:
-            trimite_email_acceptare(email, username)
-        except:
-            pass
+        Thread(
+            target=trimite_email_acceptare,
+            args=(email, username),
+            daemon=True
+        ).start()
 
         return jsonify({"status": "success"}), 200
 

@@ -1,6 +1,7 @@
 import os
 import json
 import resend  # <--- IMPORT NOU
+from html import escape
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from threading import Thread  # <--- IMPORT NECESAR PENTRU VITEZĂ
@@ -16,6 +17,7 @@ inregistrare_bp = Blueprint("inregistrare", __name__)
 # Configurare Resend
 resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_IDENTITY = "ACS Hwarang Sibiu <site@hwarang.ro>"
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hwarang.ro").rstrip("/")
 
 
 # --- FUNCȚII EMAIL INTERNE ---
@@ -50,11 +52,12 @@ def trimite_email_confirmare(destinatar: str, username: str):
 
 
 def trimite_email_acceptare(destinatar: str, username: str):
+    login_url = f"{FRONTEND_URL}/autentificare"
     html = f"""
         <h2 style="color: green;">Cerere Acceptată!</h2>
-        <p>Salut, {username}!</p>
+        <p>Salut, {escape(username)}!</p>
         <p>Cererea ta a fost aprobată. Acum te poți autentifica pe site.</p>
-        <a href="https://hwarang.ro/autentificare">Mergi la Login</a>
+        <a href="{escape(login_url, quote=True)}">Mergi la Login</a>
     """
     _send_via_resend(destinatar, "Cerere acceptată - ACS Hwarang", html)
 
