@@ -165,6 +165,39 @@ def get_eligibilitate_sportivi():
         if conn: conn.close()
 
 
+@exams_bp.route('/api/sportivi/<sportiv_id>/examene', methods=['GET'])
+@token_required
+def get_istoric_examene(sportiv_id):
+    rol = str(getattr(request, 'user_role', '') or '').strip().lower()
+    if rol not in {'admin', 'antrenor'}:
+        return jsonify({"status": "error", "message": "Acces interzis."}), 403
+
+    conn = get_conn()
+    cur = None
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT centura_obtinuta, data_examen, feedback_antrenor
+            FROM examene_centura
+            WHERE sportiv_id::text = %s
+            ORDER BY data_examen DESC, id DESC
+        """, (sportiv_id,))
+
+        examene = [{
+            "centura": row["centura_obtinuta"],
+            "data_examen": row["data_examen"].isoformat()[:10] if row["data_examen"] else "",
+            "feedback": row["feedback_antrenor"] or ""
+        } for row in cur.fetchall()]
+
+        return jsonify(examene), 200
+    except Exception as e:
+        print(f"[EROARE ISTORIC EXAMENE]: {e}")
+        return jsonify({"status": "error", "message": "Eroare la încărcarea istoricului."}), 500
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+
 @exams_bp.route('/api/sportivi/actualizeaza', methods=['PUT'])
 @token_required
 def actualizeaza_sportiv():
