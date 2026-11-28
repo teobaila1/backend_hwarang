@@ -103,6 +103,16 @@ def anunta_concurs():
             )
         } for email in emails]
 
+        confirmare_necesara = f"CONFIRM {len(messages)} EMAILURI"
+        if messages and data.get('confirmare') != confirmare_necesara:
+            return jsonify({
+                "status": "preview",
+                "notificari_estimate": len(messages),
+                "notificari_programate": 0,
+                "confirmare_necesara": confirmare_necesara,
+                "message": "Previzualizare: nu s-a trimis niciun email."
+            }), 200
+
         if messages:
             send_emails_in_background(messages)
 

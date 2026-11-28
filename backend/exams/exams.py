@@ -201,7 +201,7 @@ def notifica_sportivi_eligibili():
             if este_eligibil:
                 eligibili.append(sportiv)
 
-        notificati = 0
+        mesaje = []
         for sportiv in eligibili:
             email = (sportiv['email_destinatar'] or '').strip()
             if not email or '@' not in email:
@@ -220,13 +220,38 @@ def notifica_sportivi_eligibili():
                 f"Salut, {sportiv['nume_complet'] or 'sportiv'}! Ești eligibil pentru "
                 f"următoarea gradare, programată pentru {data_formatata}."
             )
-            send_email_in_background(email, subject, html, text)
-            notificati += 1
+            mesaje.append({
+                "to": email,
+                "subject": subject,
+                "html": html,
+                "text": text
+            })
+
+        confirmare_necesara = (
+            f"CONFIRM {len(mesaje)} EMAILURI PENTRU {data_gradare.isoformat()}"
+        )
+        if mesaje and data.get('confirmare') != confirmare_necesara:
+            return jsonify({
+                "status": "preview",
+                "sportivi_eligibili": len(eligibili),
+                "notificari_estimate": len(mesaje),
+                "notificari_programate": 0,
+                "confirmare_necesara": confirmare_necesara,
+                "message": "Previzualizare: nu s-a trimis niciun email."
+            }), 200
+
+        for mesaj in mesaje:
+            send_email_in_background(
+                mesaj["to"],
+                mesaj["subject"],
+                mesaj["html"],
+                mesaj["text"]
+            )
 
         return jsonify({
             "status": "success",
             "sportivi_eligibili": len(eligibili),
-            "notificari_programate": notificati
+            "notificari_programate": len(mesaje)
         }), 200
     except Exception as e:
         print(f"[EROARE NOTIFICARE ELIGIBILITATE]: {e}")
