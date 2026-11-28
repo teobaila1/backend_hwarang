@@ -1,9 +1,11 @@
 from flask import Blueprint, jsonify, request
 from datetime import datetime, date
+from html import escape
 import psycopg2
 import psycopg2.extras
 from backend.config import get_conn
 from backend.accounts.decorators import token_required
+from backend.mails.emailer import send_email_in_background
 
 exams_bp = Blueprint('exams', __name__)
 
@@ -80,6 +82,52 @@ def calculeaza_timp_scurs(ultima_gradare):
     return luni, zile_ramase, text_timp, eligibil
 
 
+ELIGIBILITATE_QUERY = """
+    SELECT
+        u.id::text as id,
+        u.nume_complet,
+        p.cnp,
+        COALESCE(p.data_nasterii, u.data_nasterii) as data_nasterii,
+        p.activ,
+        e.centura_obtinuta as centura_curenta,
+        e.data_examen as ultima_gradare,
+        e.feedback_antrenor,
+        u.email as email_destinatar,
+        'utilizator' as tip_inregistrare
+    FROM utilizatori u
+    LEFT JOIN profil_sportiv p ON u.id = p.utilizator_id
+    LEFT JOIN LATERAL (
+        SELECT centura_obtinuta, data_examen, feedback_antrenor
+        FROM examene_centura
+        WHERE sportiv_id::text = u.id::text
+        ORDER BY data_examen DESC, id DESC LIMIT 1
+    ) e ON true
+    WHERE u.rol = 'Sportiv' AND COALESCE(p.activ, true) = true
+
+    UNION ALL
+
+    SELECT
+        c.id::text as id,
+        c.nume as nume_complet,
+        NULL::varchar as cnp,
+        c.data_nasterii,
+        true as activ,
+        e.centura_obtinuta as centura_curenta,
+        e.data_examen as ultima_gradare,
+        e.feedback_antrenor,
+        parinte.email as email_destinatar,
+        'copil' as tip_inregistrare
+    FROM copii c
+    LEFT JOIN utilizatori parinte ON parinte.id = c.id_parinte
+    LEFT JOIN LATERAL (
+        SELECT centura_obtinuta, data_examen, feedback_antrenor
+        FROM examene_centura
+        WHERE sportiv_id::text = c.id::text
+        ORDER BY data_examen DESC, id DESC LIMIT 1
+    ) e ON true
+"""
+
+
 @exams_bp.route('/api/sportivi/eligibilitate', methods=['GET'])
 @token_required
 def get_eligibilitate_sportivi():
@@ -87,50 +135,7 @@ def get_eligibilitate_sportivi():
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
-        query = """
-            -- 1. Sportivii cu cont propriu (preluăm data_nasterii din profil_sportiv sau utilizatori)
-            SELECT 
-                u.id::text as id, 
-                u.nume_complet,
-                p.cnp,
-                COALESCE(p.data_nasterii, u.data_nasterii) as data_nasterii,
-                p.activ,
-                e.centura_obtinuta as centura_curenta,
-                e.data_examen as ultima_gradare,
-                e.feedback_antrenor,
-                'utilizator' as tip_inregistrare
-            FROM utilizatori u
-            LEFT JOIN profil_sportiv p ON u.id = p.utilizator_id
-            LEFT JOIN LATERAL (
-                SELECT centura_obtinuta, data_examen, feedback_antrenor
-                FROM examene_centura
-                WHERE sportiv_id::text = u.id::text
-                ORDER BY data_examen DESC, id DESC LIMIT 1
-            ) e ON true
-            WHERE u.rol = 'Sportiv' AND COALESCE(p.activ, true) = true
-
-            UNION ALL
-
-            -- 2. Copiii afiliați părinților (preluăm data_nasterii din tabela copii)
-            SELECT 
-                c.id::text as id, 
-                c.nume as nume_complet, 
-                NULL::varchar as cnp, 
-                c.data_nasterii,
-                true as activ,
-                e.centura_obtinuta as centura_curenta,
-                e.data_examen as ultima_gradare,
-                e.feedback_antrenor,
-                'copil' as tip_inregistrare
-            FROM copii c
-            LEFT JOIN LATERAL (
-                SELECT centura_obtinuta, data_examen, feedback_antrenor
-                FROM examene_centura
-                WHERE sportiv_id::text = c.id::text
-                ORDER BY data_examen DESC, id DESC LIMIT 1
-            ) e ON true
-        """
-        cur.execute(query)
+        cur.execute(ELIGIBILITATE_QUERY)
         sportivi = cur.fetchall()
 
         rezultate = []
@@ -162,6 +167,105 @@ def get_eligibilitate_sportivi():
         print(f"[EROARE SQL GET ELIGIBILITATE]: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
+        if conn: conn.close()
+
+
+@exams_bp.route('/api/sportivi/eligibilitate/notificare', methods=['POST'])
+@token_required
+def notifica_sportivi_eligibili():
+    rol = str(getattr(request, 'user_role', '') or '').strip().lower()
+    if rol not in {'admin', 'antrenor'}:
+        return jsonify({"status": "error", "message": "Acces interzis."}), 403
+
+    data = request.get_json(silent=True) or {}
+    data_examen = data.get('data_examen')
+    try:
+        data_gradare = date.fromisoformat(data_examen)
+        if data_gradare < date.today():
+            raise ValueError("Data gradării trebuie să fie în viitor.")
+    except (TypeError, ValueError):
+        return jsonify({
+            "status": "error",
+            "message": "Trimite o dată viitoare validă în format YYYY-MM-DD."
+        }), 400
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(ELIGIBILITATE_QUERY)
+        sportivi = cur.fetchall()
+
+        eligibili = []
+        for sportiv in sportivi:
+            _, _, _, este_eligibil = calculeaza_timp_scurs(sportiv['ultima_gradare'])
+            if este_eligibil:
+                eligibili.append(sportiv)
+
+        notificati = 0
+        for sportiv in eligibili:
+            email = (sportiv['email_destinatar'] or '').strip()
+            if not email or '@' not in email:
+                continue
+
+            nume = escape(sportiv['nume_complet'] or "sportiv")
+            data_formatata = data_gradare.strftime('%d.%m.%Y')
+            subject = "Ești eligibil pentru următoarea gradare - ACS Hwarang"
+            html = (
+                f"<p>Salut, {nume}!</p>"
+                f"<p>Ești eligibil pentru următoarea gradare, programată pentru "
+                f"<strong>{data_formatata}</strong>.</p>"
+                "<p>Pentru detalii, discută cu antrenorul tău.</p>"
+            )
+            text = (
+                f"Salut, {sportiv['nume_complet'] or 'sportiv'}! Ești eligibil pentru "
+                f"următoarea gradare, programată pentru {data_formatata}."
+            )
+            send_email_in_background(email, subject, html, text)
+            notificati += 1
+
+        return jsonify({
+            "status": "success",
+            "sportivi_eligibili": len(eligibili),
+            "notificari_programate": notificati
+        }), 200
+    except Exception as e:
+        print(f"[EROARE NOTIFICARE ELIGIBILITATE]: {e}")
+        return jsonify({"status": "error", "message": "Eroare la notificarea sportivilor."}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@exams_bp.route('/api/sportivi/<sportiv_id>/examene', methods=['GET'])
+@token_required
+def get_istoric_examene(sportiv_id):
+    rol = str(getattr(request, 'user_role', '') or '').strip().lower()
+    if rol not in {'admin', 'antrenor'}:
+        return jsonify({"status": "error", "message": "Acces interzis."}), 403
+
+    conn = get_conn()
+    cur = None
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT centura_obtinuta, data_examen, feedback_antrenor
+            FROM examene_centura
+            WHERE sportiv_id::text = %s
+            ORDER BY data_examen DESC, id DESC
+        """, (sportiv_id,))
+
+        examene = [{
+            "centura": row["centura_obtinuta"],
+            "data_examen": row["data_examen"].isoformat()[:10] if row["data_examen"] else "",
+            "feedback": row["feedback_antrenor"] or ""
+        } for row in cur.fetchall()]
+
+        return jsonify(examene), 200
+    except Exception as e:
+        print(f"[EROARE ISTORIC EXAMENE]: {e}")
+        return jsonify({"status": "error", "message": "Eroare la încărcarea istoricului."}), 500
+    finally:
+        if cur: cur.close()
         if conn: conn.close()
 
 
@@ -231,6 +335,47 @@ def salveaza_examen():
         # Salvăm sportiv_id ca string/text pentru a suporta atât int, cât și UUID
         cur.execute(query, (str(sportiv_id), centura_obtinuta, data_examen, feedback))
         conn.commit()
+
+        try:
+            cur.execute("""
+                SELECT email, COALESCE(nume_complet, username) AS nume
+                FROM utilizatori
+                WHERE CAST(id AS TEXT) = %s AND rol = 'Sportiv'
+                LIMIT 1
+            """, (str(sportiv_id),))
+            destinatar = cur.fetchone()
+            if not destinatar:
+                cur.execute("""
+                    SELECT parinte.email, copil.nume
+                    FROM copii copil
+                    LEFT JOIN utilizatori parinte ON parinte.id = copil.id_parinte
+                    WHERE CAST(copil.id AS TEXT) = %s
+                    LIMIT 1
+                """, (str(sportiv_id),))
+                destinatar = cur.fetchone()
+            if destinatar and destinatar['email']:
+                nume = escape(destinatar['nume'] or "sportiv")
+                centura_email = escape(str(centura_obtinuta))
+                data_email = escape(str(data_examen))
+                feedback_email = escape(str(feedback or "Fără feedback"))
+                html = (
+                    f"<p>Salut, {nume}!</p>"
+                    f"<p>Ai obținut centura <strong>{centura_email}</strong> "
+                    f"la examenul din <strong>{data_email}</strong>.</p>"
+                    f"<p>Feedback-ul antrenorului: {feedback_email}</p>"
+                )
+                text = (
+                    f"Ai obținut centura {centura_obtinuta} la examenul din "
+                    f"{data_examen}. Feedback-ul antrenorului: {feedback or 'Fără feedback'}"
+                )
+                send_email_in_background(
+                    destinatar['email'],
+                    "Felicitări pentru noua centură - ACS Hwarang",
+                    html,
+                    text
+                )
+        except Exception as mail_error:
+            print(f"[WARN] Examenul a fost salvat, dar notificarea nu a putut fi programată: {mail_error}")
         
         return jsonify({"status": "success", "message": "Examenul a fost salvat cu succes!"}), 201
 
