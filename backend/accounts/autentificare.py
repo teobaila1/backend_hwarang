@@ -49,6 +49,10 @@ def login():
             if not pass_ok and stored_pass == password:
                 pass_ok = True
 
+            role = (user_row.get('rol') or '').strip().lower()
+            token_lifetime_days = 30 if role in {'parinte', 'sportiv'} else 7
+
+
             if pass_ok:
                 token = jwt.encode({
                     'user_id': user_row['id'],
@@ -66,7 +70,9 @@ def login():
                     'nume_complet': full_name,
                     'rol': user_row['rol'],
                     'user_id': user_row['id'],
-                    'message': 'Autentificare reușită!'
+                    'message': 'Autentificare reușită!',
+                    'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7),
+                    'exp': datetime.datetime.utcnow() + datetime.timedelta(days=token_lifetime_days)
                 }), 200
 
         return jsonify({'status': 'error', 'message': 'Username, email sau parolă incorecte.'}), 401
